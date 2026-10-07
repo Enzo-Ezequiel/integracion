@@ -6,11 +6,14 @@
 // instalada (mkcert -install). En una máquina sin la CA: -e INSECURE=1. k6 (Go) no
 // resuelve *.localhost en Windows: el host se apunta a TRAEFIK_IP solo dentro de la prueba.
 //
+// El tiempo de extracción se mide aparte del total con X-Extraction-Time-Ms, que el
+// orquestador (desde la 1.0.2) reenvía en cada 201: métrica tiempo_extraccion_ms.
+//
 // Uso: k6 run -e VUS=5 -e DURATION=30s k6-orquestador.js
 import http from "k6/http";
 import encoding from "k6/encoding";
 import { check } from "k6";
-import { Counter } from "k6/metrics";
+import { Counter, Trend } from "k6/metrics";
 
 const HOST = __ENV.HOST || "pdf.universidad.localhost";
 const TRAEFIK_IP = __ENV.TRAEFIK_IP || "127.0.0.1";
@@ -27,6 +30,7 @@ const pdfs = Array.from({ length: CANTIDAD }, (_, i) => {
 
 const creados = new Counter("pdf_creados_201");
 const duplicados = new Counter("pdf_duplicados_409");
+const tiempoExtraccion = new Trend("tiempo_extraccion_ms", true);
 
 export const options = {
   vus: Number(__ENV.VUS || 1),
@@ -47,7 +51,11 @@ export default function () {
     headers: { "Content-Type": "application/json" },
   });
 
-  if (res.status === 201) creados.add(1);
+  if (res.status === 201) {
+    creados.add(1);
+    const extraccion = Number(res.headers["X-Extraction-Time-Ms"]);
+    if (!Number.isNaN(extraccion)) tiempoExtraccion.add(extraccion);
+  }
   if (res.status === 409) duplicados.add(1);
 
   check(res, {

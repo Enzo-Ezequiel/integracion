@@ -5,7 +5,7 @@ MongoDB y Redis reales, y documenta las pruebas de integración.
 
 | Servicio | Repo | Imagen | Público |
 |---|---|---|---|
-| orquestador | [vale36/Orquestador](https://github.com/vale36/Orquestador) | `orquestador:1.0.1` | sí, por Traefik: `https://pdf.universidad.localhost` |
+| orquestador | [vale36/Orquestador](https://github.com/vale36/Orquestador) | `orquestador:1.0.2` | sí, por Traefik: `https://pdf.universidad.localhost` |
 | validacion-pdf | [valentinapenasco/validacion-pdf](https://github.com/valentinapenasco/validacion-pdf) | `validacion-pdf:1.0.1` | no |
 | extraccion-texto | [NicolasPerez735/Extraccion-de-texto-pdf-](https://github.com/NicolasPerez735/Extraccion-de-texto-pdf-) | `extraccion-texto:1.0.2` | no |
 | persistencia-actualizaciones | [matiasscanoo/persistencia-actualizaciones](https://github.com/matiasscanoo/persistencia-actualizaciones) | `persistencia-actualizaciones:1.0.1` | no |
@@ -92,7 +92,7 @@ Los pasos, a mano:
    docker build -t extraccion-texto:1.0.2 Extraccion-de-texto-pdf-
    docker build -t persistencia-actualizaciones:1.0.1 persistencia-actualizaciones
    docker build -t persistencia-consultas:1.0.1 persistencia-consultas
-   docker build -t orquestador:1.0.1 Orquestador
+   docker build -t orquestador:1.0.2 Orquestador
    ```
 
    Estas versiones salen de las ramas `fix/...` de cada repo (ver
@@ -242,8 +242,11 @@ k6 no resuelve `*.localhost` en Windows (`lookup ... no such host`): el script a
 `TRAEFIK_IP` (por defecto `127.0.0.1`) con la opción `hosts` de k6, sin tocar el archivo
 `hosts` del sistema.
 
-El tiempo de extracción sale de `duracion_ms` en el log de `extraccion-texto`, porque el
-servicio no devuelve `X-Extraction-Time-Ms`.
+El tiempo de extracción se mide aparte del total con `X-Extraction-Time-Ms`: lo calcula
+`extraccion-texto` y el orquestador (desde `orquestador:1.0.2`) lo reenvía en cada `201`.
+k6 lo registra en la métrica `tiempo_extraccion_ms`; los `409` no lo traen. Los resultados de
+abajo son anteriores a la 1.0.2: ahí el tiempo de extracción se tomó de `duracion_ms` en el log
+de `extraccion-texto`.
 
 Resultados del 2026-10-07 (Docker Desktop, 12 CPUs, notebook enchufada; 100 % de checks OK y
 0 errores en todas las corridas):
@@ -404,5 +407,7 @@ Snyk queda para el final, con la cuenta de la facultad (es web).
   `RETRY_ATTEMPTS + 1` el trabajo de extracción. Conviene un `REQUEST_TIMEOUT_SECONDS` con
   margen sobre el p95 medido.
 - **Consultas no registra si fue HIT o MISS**; solo se ve en `duracion_ms`.
-- **Sin `X-Extraction-Time-Ms`** (lo tenía el monolito, no está en el contrato): para medir la
-  extracción separada del total hay que mirar `duracion_ms` en el log de `extraccion-texto`.
+- **`X-Extraction-Time-Ms` no está en el contrato.** Extracción lo devuelve y el orquestador
+  lo reenvía (como el monolito) para medir la extracción aparte del total; si el grupo lo
+  quiere oficial, se agrega en una versión nueva del contrato. Falta repetir la prueba de
+  carga con `orquestador:1.0.2` para tener la columna de extracción medida así.
