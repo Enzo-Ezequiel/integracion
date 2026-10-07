@@ -43,6 +43,21 @@ y Redis no publican 27017 ni 6379 porque Traefik usa esos puertos como entrypoin
   no la publican (`CRYPT_E_NO_REVOCATION_CHECK`): usar `curl --ssl-no-revoke`, que sigue
   validando la cadena y el nombre. No hace falta `-k`.
 
+## Levantar todo con un comando
+
+```bash
+./scripts/levantar.sh            # verifica, construye, levanta y hace el humo
+./scripts/levantar.sh --tests    # además corre la suite de los cinco repos
+./scripts/levantar.sh --sin-build
+```
+
+El script verifica las herramientas, muestra en qué rama está cada repo, crea la red
+`redutn` y los `.env` que falten a partir de los `.env.example`, construye cada imagen con el
+tag del `.env`, levanta Traefik si no corre, levanta el stack esperando los healthchecks y
+prueba `/health` de los cinco servicios y del orquestador por Traefik. No usa secretos.
+
+Los pasos, a mano:
+
 ## Levantar todo
 
 1. Construir las imágenes con su tag de versión, desde la carpeta grande del proyecto:
@@ -128,6 +143,37 @@ curl --ssl-no-revoke -X POST https://pdf.universidad.localhost/pdf -H "Content-T
 docker compose logs | grep aaaaaaaa-0000-4000-8000-000000000001
 ```
 
+## Postman
+
+`postman/` tiene una colección por microservicio y una del flujo completo (formato v2.1,
+variable `baseURL`). Cada request manda un `X-Correlation-ID` nuevo y verifica que vuelva,
+el status, la forma de la respuesta y el formato común de errores.
+
+| Colección | `baseURL` por defecto | Requests | Qué cubre |
+|---|---|---|---|
+| `validacion-pdf` | `http://localhost:8000` | 4 | health, PDF válido, no-PDF → 422, sin nombre → 400 |
+| `extraccion-texto` | `http://localhost:8000` | 4 | health, PDF de 2 páginas (texto, SHA-256, páginas), corrupto → 422, Base64 inválido → 422 |
+| `persistencia-actualizaciones` | `http://localhost:8000` | 8 | crear, duplicado → 409, campo extra → 400, PATCH, DELETE → 204, DELETE otra vez y PATCH inexistente → 404 |
+| `persistencia-consultas` | `http://localhost:8000` | 5 | health, listado, por id y por checksum (toma el primero del listado), inexistente → 404 |
+| `orquestador` | `https://pdf.universidad.localhost` | 6 | health, alta (201 o 409), duplicado → 409, no-PDF y corrupto → 422, sin archivo → 400 |
+| `flujo-completo` | `https://pdf.universidad.localhost` | 3 | genera un PDF distinto en cada corrida: alta → 201 con el texto extraído, repetido → 409 |
+
+Las de los servicios internos apuntan a `localhost:8000`, para correr cada servicio solo
+(su `docker run -p 8000:8000` o `uvicorn`). En la integración no publican puertos: se prueban
+desde la red `redutn` con newman.
+
+```bash
+docker run --rm --network redutn -v "$(pwd)/postman:/etc/newman" postman/newman:alpine \
+  run validacion-pdf.postman_collection.json --env-var baseURL=http://validacion-pdf:8000
+```
+
+Resultado del 2026-10-07: las 6 colecciones en verde, 29 requests y 85 assertions sin
+fallos. Las dos públicas se corrieron con `baseURL=http://orquestador:8000`: dentro de un
+contenedor, Node resuelve `*.localhost` a sí mismo. Desde Postman en la PC,
+`https://pdf.universidad.localhost` llega a Traefik. Si Postman no reconoce la CA de mkcert,
+desactivar "SSL certificate verification" o agregar `rootCA.pem` (`mkcert -CAROOT`) en
+Settings → Certificates.
+
 ## Resultados (2026-10-07)
 
 Docker Desktop 29.6.2 en Windows 11, con la notebook enchufada.
@@ -206,6 +252,77 @@ Lectura:
   reutiliza la conexión keep-alive y el DNS de Docker reparte por conexión, no por request.
   Con 5 o más VUs se reparte parejo (442 / 448 / 361).
 
+## Prueba de carga (vegeta)
+
+`carga/run_vegeta.sh` hace la misma prueba que k6 pero a **tasa fija**, como el
+`run_vegeta.sh` del profesor. Los reportes binarios quedan en `resultados/` (no se
+versiona).
+
+```bash
+cd carga
+./run_vegeta.sh 40/s 30s a      # tasa, duración, semilla de los PDFs
+```
+
+vegeta no resuelve `*.localhost` en Windows y no permite fijar el SNI. Por eso se conecta a
+`TRAEFIK_IP` con el header `Host` (Traefik rutea por ese header) y con `-insecure`: sin SNI,
+Traefik entrega su certificado por defecto. La validación TLS la cubre k6. vegeta cuenta como
+"Success" solo los 2xx; acá todas las respuestas fueron 409, que es el resultado correcto con
+PDFs repetidos.
+
+Resultados del 2026-10-07 (3 réplicas de extracción, por Traefik):
+
+| Tasa | Promedio | p50 | p95 | p99 | Respuestas |
+|---|---|---|---|---|---|
+| 20/s | 128 ms | 115 ms | 222 ms | 275 ms | 600 × 409 |
+| 40/s | 154 ms | 138 ms | 280 ms | 446 ms | 1200 × 409 |
+| 60/s | 20,6 s | 22,8 s | 30 s | 30 s | 971 × 409 y 829 cortadas por el timeout de vegeta (30 s) |
+
+A 60/s se supera la capacidad medida con k6 (~41 PDF/s con 3 réplicas) y la cola crece sin
+límite. El sistema no se cae: los contenedores siguen `healthy`, el orquestador no devuelve
+ningún 5xx y termina procesando las 3600 peticiones (las 829 cortadas se cortaron del lado
+del cliente).
+
+## Seguridad de imágenes (Grype)
+
+```bash
+./scripts/grype.sh
+```
+
+Corre Grype como contenedor (`anchore/grype`, base de vulnerabilidades en el volumen
+`grype-db`) sobre las cinco imágenes del `.env` y escribe `seguridad/resumen.md`. Los JSON
+completos quedan en `seguridad/` sin versionar.
+
+Resultado del 2026-10-07 (Grype 0.120.1):
+
+| Imagen | Base | Critical | High | Medium | Total | Con arreglo |
+|---|---|---|---|---|---|---|
+| `extraccion-texto:1.0.0` | Debian 12 | **16** | 136 | 145 | 421 | 163 |
+| `orquestador:1.0.1` | Debian 13 | 0 | 55 | 59 | 172 | 13 |
+| `persistencia-actualizaciones:1.0.0` | Debian 13 | 0 | 59 | 62 | 179 | 20 |
+| `persistencia-consultas:1.0.0` | Debian 13 | 0 | 61 | 67 | 191 | 32 |
+| `validacion-pdf:1.0.0` | Debian 13 | 0 | 67 | 67 | 200 | 41 |
+
+Lectura:
+
+- **Extracción concentra los 16 Critical** porque su imagen base es
+  `ghcr.io/astral-sh/uv:python3.11-bookworm-slim` (Debian 12, con openssl, gnutls, perl y
+  glibc más viejos). Las otras cuatro usan `python:3.1x-slim` (Debian 13). Cambiar la base
+  a `python:3.12-slim` + el binario de uv, como hacen los demás, elimina la mayoría.
+- **El resto de High y Medium son paquetes del sistema operativo** de la imagen base, casi
+  todos sin arreglo publicado todavía. Se resuelven reconstruyendo cuando Debian publique.
+- **Dependencias de Python con arreglo disponible:**
+  - `validacion-pdf`: `starlette` 0.47.3 (High; arreglo en 0.49.1 o posterior), que llega
+    por `fastapi==0.136.0`: se arregla subiendo FastAPI. Y `python-multipart` 0.0.26 (High;
+    arreglo en 0.0.27 o posterior), declarada directamente en `pyproject.toml` pero sin uso
+    en `app/` (no hay `UploadFile` ni `Form`): conviene quitarla (YAGNI).
+  - `persistencia-consultas`: `pymongo` 4.18.1 (High; arreglo en 4.18.2).
+  - `extraccion-texto` y `persistencia-actualizaciones`: `wheel` 0.45.1 y
+    `jaraco-context` 5.3.0 (High), que vienen con el `setuptools` del Python de la imagen,
+    no del proyecto.
+  - Todas: `pip` de la imagen base (Medium/Low). Los servicios usan uv, no pip.
+
+Snyk queda para el final, con la cuenta de la facultad (es web).
+
 ## Hallazgos de la integración
 
 - **Fechas del orquestador con microsegundos.** `POST /pdf` devolvía `created_at` como
@@ -226,7 +343,9 @@ Lectura:
   anterior). Mitigaciones posibles: Redis sin persistencia (es solo caché) o un TTL más corto.
 - **Traefik no balancea extracción.** Solo el orquestador pasa por Traefik; el reparto entre
   las 3 réplicas de extracción lo hace el DNS de Docker por conexión (ver carga).
-- **Vegeta pendiente:** no está instalado en la notebook. La carga se midió solo con k6.
+- **Vulnerabilidades de las imágenes** (ver Grype): base Debian 12 en extracción y
+  dependencias de Python con arreglo disponible en validación y consultas. Lo arregla cada
+  dueño en su repo.
 - **Extracción sigue trabajando después de un timeout.** El orquestador corta y reintenta,
   pero el servidor no cancela la extracción en curso: bajo carga, un timeout multiplica por
   `RETRY_ATTEMPTS + 1` el trabajo de extracción. Conviene un `REQUEST_TIMEOUT_SECONDS` con
