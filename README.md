@@ -5,7 +5,7 @@ MongoDB y Redis reales, y documenta las pruebas de integración.
 
 | Servicio | Repo | Imagen | Público |
 |---|---|---|---|
-| orquestador | [vale36/Orquestador](https://github.com/vale36/Orquestador) | `orquestador:1.0.1` | sí, por Traefik: `https://pdf.universidad.localhost` |
+| orquestador | [vale36/Orquestador](https://github.com/vale36/Orquestador) | `orquestador:1.0.2` | sí, por Traefik: `https://pdf.universidad.localhost` |
 | validacion-pdf | [valentinapenasco/validacion-pdf](https://github.com/valentinapenasco/validacion-pdf) | `validacion-pdf:1.0.1` | no |
 | extraccion-texto | [NicolasPerez735/Extraccion-de-texto-pdf-](https://github.com/NicolasPerez735/Extraccion-de-texto-pdf-) | `extraccion-texto:1.0.2` | no |
 | persistencia-actualizaciones | [matiasscanoo/persistencia-actualizaciones](https://github.com/matiasscanoo/persistencia-actualizaciones) | `persistencia-actualizaciones:1.0.1` | no |
@@ -92,7 +92,7 @@ Los pasos, a mano:
    docker build -t extraccion-texto:1.0.2 Extraccion-de-texto-pdf-
    docker build -t persistencia-actualizaciones:1.0.1 persistencia-actualizaciones
    docker build -t persistencia-consultas:1.0.1 persistencia-consultas
-   docker build -t orquestador:1.0.1 Orquestador
+   docker build -t orquestador:1.0.2 Orquestador
    ```
 
    Estas versiones salen de las ramas `fix/...` de cada repo (ver
