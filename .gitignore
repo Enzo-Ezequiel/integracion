@@ -3,3 +3,5 @@ env/*.env
 pdfs/
 resultados/
 __pycache__/
+seguridad/*.grype.json
+seguridad/*.err
