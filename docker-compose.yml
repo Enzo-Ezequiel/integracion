@@ -1,0 +1,89 @@
+# Integración de los cinco microservicios del contrato microservicios-pdf.
+# Requiere la red externa: docker network create redutn
+name: integracion-pdf
+
+services:
+  orquestador:
+    image: orquestador:${ORQUESTADOR_VERSION:?definir en .env}
+    env_file: ./env/orquestador.env
+    networks: [redutn]
+    # Único servicio público. Hasta sumar Traefik se publica en el host; el resto queda interno.
+    ports:
+      - "${ORQUESTADOR_HOST_PORT:?definir en .env}:8000"
+    depends_on:
+      validacion-pdf:
+        condition: service_healthy
+      extraccion-texto:
+        condition: service_healthy
+      persistencia-actualizaciones:
+        condition: service_healthy
+      persistencia-consultas:
+        condition: service_healthy
+    restart: unless-stopped
+
+  validacion-pdf:
+    image: validacion-pdf:${VALIDACION_VERSION:?definir en .env}
+    env_file: ./env/validacion.env
+    networks: [redutn]
+    restart: unless-stopped
+
+  extraccion-texto:
+    image: extraccion-texto:${EXTRACCION_VERSION:?definir en .env}
+    env_file: ./env/extraccion.env
+    networks: [redutn]
+    restart: unless-stopped
+
+  persistencia-actualizaciones:
+    image: persistencia-actualizaciones:${ACTUALIZACIONES_VERSION:?definir en .env}
+    env_file: ./env/actualizaciones.env
+    networks: [redutn]
+    # No arranca si MongoDB no responde (decisión del servicio): espera el healthcheck
+    # y, si MongoDB se cae después, Docker lo reinicia.
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  persistencia-consultas:
+    image: persistencia-consultas:${CONSULTAS_VERSION:?definir en .env}
+    env_file: ./env/consultas.env
+    networks: [redutn]
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # MongoDB y Redis no publican puertos: Traefik usa 27017 y 6379 como entrypoints TCP.
+  mongodb:
+    image: mongo:7.0
+    volumes:
+      - mongo_data:/data/db
+    networks: [redutn]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7
+    volumes:
+      - redis_data:/data
+    networks: [redutn]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+networks:
+  redutn:
+    external: true
+
+volumes:
+  mongo_data:
+  redis_data:
