@@ -1,7 +1,10 @@
 # integracion — microservicios-pdf
 
-Levanta juntos los cinco microservicios del contrato `microservicios-pdf` v1.0.0 con
+Levanta juntos los cinco microservicios del contrato `microservicios-pdf` v1.1.0 con
 MongoDB y Redis reales, y documenta las pruebas de integración.
+
+El contrato completo, con las aclaraciones de la 1.1.0 (compatibles con la 1.0.0) y su registro
+de cambios, está en [CONTRATO.md](CONTRATO.md).
 
 | Servicio | Repo | Imagen | Público |
 |---|---|---|---|
