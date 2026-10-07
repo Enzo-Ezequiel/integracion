@@ -2,8 +2,8 @@
 // Desde la segunda vuelta persistencia responde 409 DUPLICATE_CHECKSUM: igual pasa
 // por validación y extracción completas, así que se cuenta como respuesta correcta.
 //
-// Entra por el Traefik del equipo (HTTPS). El certificado mkcert es de desarrollo y puede
-// no estar instalado en la máquina que corre k6: por eso no se verifica. k6 (Go) no
+// Entra por el Traefik del equipo (HTTPS) y valida el certificado mkcert: hace falta su CA
+// instalada (mkcert -install). En una máquina sin la CA: -e INSECURE=1. k6 (Go) no
 // resuelve *.localhost en Windows: el host se apunta a TRAEFIK_IP solo dentro de la prueba.
 //
 // Uso: k6 run -e VUS=5 -e DURATION=30s k6-orquestador.js
@@ -31,7 +31,7 @@ const duplicados = new Counter("pdf_duplicados_409");
 export const options = {
   vus: Number(__ENV.VUS || 1),
   duration: __ENV.DURATION || "30s",
-  insecureSkipTLSVerify: true,
+  insecureSkipTLSVerify: __ENV.INSECURE === "1",
   hosts: { [HOST]: TRAEFIK_IP },
   thresholds: {
     checks: ["rate==1.0"],
