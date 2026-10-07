@@ -128,6 +128,54 @@ Docker Desktop 29.6.2 en Windows 11, con la notebook enchufada.
 | Actualizaciones apagado | 503 `DEPENDENCY_UNAVAILABLE` en 2,7 s. Log: `Attempting SAGA compensation` → `GET /pdf/checksum` en consultas (404) → `result=nothing-to-undo`, todo con el mismo `correlation_id`. El alta no se reintenta, a propósito: no es idempotente. |
 | Redis apagado | Consultas sigue respondiendo desde MongoDB (200) y registra `cache no disponible` con el `correlation_id`. Actualizaciones escribe sin lock y sin invalidar (fail-open, su README). Ver deuda. |
 | Errores de entrada por el orquestador | No PDF → 422 `PDF_INVALID`; PDF corrupto → 422 `PDF_CORRUPTED`; 6 MB → 413 `PDF_TOO_LARGE`; sin archivo → 400 `VALIDATION_ERROR`. |
+| Timeout de extracción (`REQUEST_TIMEOUT_SECONDS=0.02`, PDF de 60 páginas) | 503 `DEPENDENCY_UNAVAILABLE` en 1,1 s. Log de los reintentos: `intento=2 de 3`, `3 de 3`, `motivo=ReadTimeout`. Sin compensación, porque no se llegó a persistir. Extracción igual terminó las 3 peticiones abandonadas (ver deuda). |
+| Redis MISS vs HIT en consultas | `GET /pdf/{id}`: MISS 8,2 ms; HIT 1,3–1,7 ms. Después del MISS queda la clave con TTL de 300 s. |
+
+## Prueba de carga (k6)
+
+`carga/k6-orquestador.js` reproduce el escenario del profesor: 10 PDFs de 10 páginas que se
+repiten durante 30 s contra `POST /pdf` del orquestador. Se arranca con la base vacía
+(`docker compose down -v`): la primera vuelta da 201 y las siguientes 409
+`DUPLICATE_CHECKSUM`. Las dos cuentan como correctas, porque el 409 también pasa por
+validación y extracción completas. Los checks verifican el texto en los 201 y el código en
+los 409.
+
+```bash
+cd carga
+k6 run -e VUS=5 -e DURATION=30s k6-orquestador.js
+docker compose up -d --scale extraccion-texto=1   # para medir con una sola réplica
+```
+
+El tiempo de extracción sale de `duracion_ms` en el log de `extraccion-texto`, porque el
+servicio no devuelve `X-Extraction-Time-Ms`.
+
+Resultados del 2026-10-07 (Docker Desktop, 12 CPUs, notebook enchufada; 100 % de checks OK y
+0 errores en todas las corridas):
+
+| Réplicas de extracción | VUs | Total prom | Total p95 | Extracción prom | Extracción p95 | PDF/s |
+|---|---|---|---|---|---|---|
+| 1 | 1 | 112 ms | 182 ms | 89 ms | 146 ms | 8,9 |
+| 1 | 3 | 354 ms | 586 ms | 300 ms | 531 ms | 8,4 |
+| 1 | 5 | 598–604 ms | 1,02–1,12 s | 509–523 ms | 898–1003 ms | 8,3 |
+| 3 | 1 | 110 ms | 188 ms | 86 ms | 148 ms | 9,0 |
+| 3 | 5 | **120 ms** | **173 ms** | 90 ms | 135 ms | **41,6** |
+| 3 | 10 | 243 ms | 417 ms | 193 ms | 341 ms | 41,1 |
+
+Lectura:
+
+- **Con 1 réplica el techo es ~8,3 PDF/s**, igual que el monolito (~11 PDF/s por proceso).
+  Al subir los VUs no aumenta el rendimiento: crece la cola, y crece *dentro* de la
+  extracción. `extraer` es un `def` sincrónico que FastAPI corre en su threadpool, así que
+  los hilos de pypdf compiten por el GIL. Varias extracciones a la vez en un proceso tardan
+  cada una más y el total no sube.
+- **Con 3 réplicas se llega a ~41 PDF/s** (5 veces más con 5 VUs). Es más que el triple
+  porque cada proceso recibe menos concurrencia y pierde menos por la contención del GIL.
+- **Contra el profesor (440 ms):** con 3 réplicas el promedio queda en 120 ms con 5 VUs y en
+  243 ms con 10 VUs (p95 417 ms). Su máquina, sus PDFs y su concurrencia no son los mismos:
+  hay que repetirlo con su escenario cuando lo tengamos.
+- **Reparto entre réplicas:** con 1 VU, todo va a una sola réplica (272 de 272): httpx
+  reutiliza la conexión keep-alive y el DNS de Docker reparte por conexión, no por request.
+  Con 5 o más VUs se reparte parejo (442 / 448 / 361).
 
 ## Hallazgos de la integración
 
@@ -148,6 +196,11 @@ Docker Desktop 29.6.2 en Windows 11, con la notebook enchufada.
   listado viejo hasta que vence `REDIS_TTL_SECONDS` (se comprobó: 217 s con el nombre
   anterior). Mitigaciones posibles: Redis sin persistencia (es solo caché) o un TTL más corto.
 - **Sin Traefik todavía.** El orquestador se publica directamente en el host.
-- **Prueba de carga pendiente** (Fase 6). Además, la extracción no devuelve el header
-  `X-Extraction-Time-Ms` que tenía el monolito: para medirla separada del total hay que mirar
-  `duracion_ms` en el log de `extraccion-texto`.
+- **Vegeta pendiente:** no está instalado en la notebook. La carga se midió solo con k6.
+- **Extracción sigue trabajando después de un timeout.** El orquestador corta y reintenta,
+  pero el servidor no cancela la extracción en curso: bajo carga, un timeout multiplica por
+  `RETRY_ATTEMPTS + 1` el trabajo de extracción. Conviene un `REQUEST_TIMEOUT_SECONDS` con
+  margen sobre el p95 medido.
+- **Consultas no registra si fue HIT o MISS**; solo se ve en `duracion_ms`.
+- **Sin `X-Extraction-Time-Ms`** (lo tenía el monolito, no está en el contrato): para medir la
+  extracción separada del total hay que mirar `duracion_ms` en el log de `extraccion-texto`.
