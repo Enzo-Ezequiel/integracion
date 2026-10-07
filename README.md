@@ -5,7 +5,7 @@ MongoDB y Redis reales, y documenta las pruebas de integración.
 
 | Servicio | Repo | Imagen | Público |
 |---|---|---|---|
-| orquestador | [vale36/Orquestador](https://github.com/vale36/Orquestador) | `orquestador:1.0.1` | sí (puerto del host `ORQUESTADOR_HOST_PORT`) |
+| orquestador | [vale36/Orquestador](https://github.com/vale36/Orquestador) | `orquestador:1.0.1` | sí, por Traefik: `https://pdf.universidad.localhost` |
 | validacion-pdf | [valentinapenasco/validacion-pdf](https://github.com/valentinapenasco/validacion-pdf) | `validacion-pdf:1.0.0` | no |
 | extraccion-texto | [NicolasPerez735/Extraccion-de-texto-pdf-](https://github.com/NicolasPerez735/Extraccion-de-texto-pdf-) | `extraccion-texto:1.0.0` | no |
 | persistencia-actualizaciones | [matiasscanoo/persistencia-actualizaciones](https://github.com/matiasscanoo/persistencia-actualizaciones) | `persistencia-actualizaciones:1.0.0` | no |
@@ -13,9 +13,10 @@ MongoDB y Redis reales, y documenta las pruebas de integración.
 | mongodb | — | `mongo:7.0` (volumen `mongo_data`) | no |
 | redis | — | `redis:7` (volumen `redis_data`) | no |
 
-Solo el orquestador publica un puerto. El resto se alcanza por nombre dentro de la red
-`redutn`. MongoDB y Redis no publican 27017 ni 6379 porque Traefik, en la infraestructura del
-equipo (`dockers/`), usa esos puertos como entrypoints TCP.
+Ningún servicio publica puertos en el host. El orquestador es el único con labels de Traefik
+(`traefik.enable=true`); el Traefik del equipo (`dockers/traefik`, `exposedByDefault: false`)
+lo publica por HTTPS. El resto se alcanza solo por nombre dentro de la red `redutn`. MongoDB
+y Redis no publican 27017 ni 6379 porque Traefik usa esos puertos como entrypoints TCP.
 
 ## Requisitos
 
@@ -27,6 +28,16 @@ equipo (`dockers/`), usa esos puertos como entrypoints TCP.
   ```
 
 - Los cinco repos clonados al lado de esta carpeta (`../validacion-pdf`, etc.).
+- El Traefik del equipo levantado (`dockers/traefik`, en la carpeta grande del proyecto):
+
+  ```bash
+  cd ../dockers/traefik && docker compose up -d
+  ```
+
+  Publica 80 (redirige a HTTPS), 443, 6379 y 27017, con certificados mkcert para
+  `*.universidad.localhost` en `certs/`. Si la CA de mkcert de quien generó los certificados
+  no está instalada en la máquina, el navegador avisa y `curl` necesita `-k`. Para que no
+  avise: `mkcert -install` y regenerar los certificados (ver `dockers/traefik/README.md`).
 
 ## Levantar todo
 
@@ -58,12 +69,15 @@ equipo (`dockers/`), usa esos puertos como entrypoints TCP.
    docker compose ps
    ```
 
-El orquestador queda en `http://localhost:8080` (`ORQUESTADOR_HOST_PORT`). Para bajar todo,
+El orquestador queda en `https://pdf.universidad.localhost` (`ORQUESTADOR_HOST`). El dashboard
+de Traefik (`https://traefik.universidad.localhost`) muestra un solo router de Docker,
+`orquestador@docker`. Para bajar todo,
 `docker compose down`, o `docker compose down -v` si también hay que borrar los datos.
 
 ## Variables
 
-`.env` (lo lee el compose): versiones de imagen (`*_VERSION`) y `ORQUESTADOR_HOST_PORT`.
+`.env` (lo lee el compose): versiones de imagen (`*_VERSION`) y `ORQUESTADOR_HOST` (el host
+de la regla de Traefik).
 Todas son obligatorias: si falta una, `docker compose` no arranca.
 
 Un archivo por servicio en `env/`, cada uno con su `.env.example` versionado:
@@ -103,7 +117,7 @@ done
 
 # Alta de un PDF por el orquestador, con un correlation_id fijo
 printf '{"archivo_base64":"%s","nombre":"documento-a-01.pdf"}' "$(base64 -w0 pdfs/documento-a-01.pdf)" > body.json
-curl -X POST http://localhost:8080/pdf -H "Content-Type: application/json" \
+curl -k -X POST https://pdf.universidad.localhost/pdf -H "Content-Type: application/json" \
      -H "X-Correlation-ID: aaaaaaaa-0000-4000-8000-000000000001" --data-binary @body.json
 
 # Recorrido de esa request por todos los servicios
@@ -129,11 +143,13 @@ Docker Desktop 29.6.2 en Windows 11, con la notebook enchufada.
 | Redis apagado | Consultas sigue respondiendo desde MongoDB (200) y registra `cache no disponible` con el `correlation_id`. Actualizaciones escribe sin lock y sin invalidar (fail-open, su README). Ver deuda. |
 | Errores de entrada por el orquestador | No PDF → 422 `PDF_INVALID`; PDF corrupto → 422 `PDF_CORRUPTED`; 6 MB → 413 `PDF_TOO_LARGE`; sin archivo → 400 `VALIDATION_ERROR`. |
 | Timeout de extracción (`REQUEST_TIMEOUT_SECONDS=0.02`, PDF de 60 páginas) | 503 `DEPENDENCY_UNAVAILABLE` en 1,1 s. Log de los reintentos: `intento=2 de 3`, `3 de 3`, `motivo=ReadTimeout`. Sin compensación, porque no se llegó a persistir. Extracción igual terminó las 3 peticiones abandonadas (ver deuda). |
+| Traefik | `https://pdf.universidad.localhost/health` → 200; por HTTP → 301 a HTTPS. Validación, extracción y persistencia por Traefik → 404: no están expuestos. `POST /pdf` por Traefik → 201 y el mismo `correlation_id` en los 5 servicios. |
 | Redis MISS vs HIT en consultas | `GET /pdf/{id}`: MISS 8,2 ms; HIT 1,3–1,7 ms. Después del MISS queda la clave con TTL de 300 s. |
 
 ## Prueba de carga (k6)
 
-`carga/k6-orquestador.js` reproduce el escenario del profesor: 10 PDFs de 10 páginas que se
+`carga/k6-orquestador.js` entra por Traefik (HTTPS, sin verificar el certificado de
+desarrollo) y reproduce el escenario del profesor: 10 PDFs de 10 páginas que se
 repiten durante 30 s contra `POST /pdf` del orquestador. Se arranca con la base vacía
 (`docker compose down -v`): la primera vuelta da 201 y las siguientes 409
 `DUPLICATE_CHECKSUM`. Las dos cuentan como correctas, porque el 409 también pasa por
@@ -145,6 +161,10 @@ cd carga
 k6 run -e VUS=5 -e DURATION=30s k6-orquestador.js
 docker compose up -d --scale extraccion-texto=1   # para medir con una sola réplica
 ```
+
+k6 no resuelve `*.localhost` en Windows (`lookup ... no such host`): el script apunta el host a
+`TRAEFIK_IP` (por defecto `127.0.0.1`) con la opción `hosts` de k6, sin tocar el archivo
+`hosts` del sistema.
 
 El tiempo de extracción sale de `duracion_ms` en el log de `extraccion-texto`, porque el
 servicio no devuelve `X-Extraction-Time-Ms`.
@@ -160,6 +180,11 @@ Resultados del 2026-10-07 (Docker Desktop, 12 CPUs, notebook enchufada; 100 % de
 | 3 | 1 | 110 ms | 188 ms | 86 ms | 148 ms | 9,0 |
 | 3 | 5 | **120 ms** | **173 ms** | 90 ms | 135 ms | **41,6** |
 | 3 | 10 | 243 ms | 417 ms | 193 ms | 341 ms | 41,1 |
+| 3, por Traefik (HTTPS) | 5 | 122 ms | 175 ms | 91 ms | 133 ms | 40,7 |
+| 3, por Traefik (HTTPS) | 10 | 232 ms | 336 ms | 184 ms | 274 ms | 42,8 |
+
+Las filas sin Traefik se midieron publicando el orquestador directo en el host (antes de
+sumar Traefik). Traefik con TLS no agrega latencia apreciable.
 
 Lectura:
 
@@ -195,7 +220,10 @@ Lectura:
   un snapshot al apagarse. Si mientras estuvo caído hubo una escritura, al volver devuelve el
   listado viejo hasta que vence `REDIS_TTL_SECONDS` (se comprobó: 217 s con el nombre
   anterior). Mitigaciones posibles: Redis sin persistencia (es solo caché) o un TTL más corto.
-- **Sin Traefik todavía.** El orquestador se publica directamente en el host.
+- **Certificados de Traefik de otra máquina.** `dockers/traefik/certs` se generó con la CA
+  de mkcert de otra PC: en la notebook hay que usar `-k` o regenerarlos.
+- **Traefik no balancea extracción.** Solo el orquestador pasa por Traefik; el reparto entre
+  las 3 réplicas de extracción lo hace el DNS de Docker por conexión (ver carga).
 - **Vegeta pendiente:** no está instalado en la notebook. La carga se midió solo con k6.
 - **Extracción sigue trabajando después de un timeout.** El orquestador corta y reintenta,
   pero el servidor no cancela la extracción en curso: bajo carga, un timeout multiplica por
