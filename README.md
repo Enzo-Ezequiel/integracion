@@ -35,9 +35,34 @@ y Redis no publican 27017 ni 6379 porque Traefik usa esos puertos como entrypoin
   ```
 
   Publica 80 (redirige a HTTPS), 443, 6379 y 27017, con certificados mkcert para
-  `*.universidad.localhost` en `certs/`. Los certificados son de cada máquina: en una máquina
-  nueva, `mkcert -install` y regenerarlos (ver `dockers/traefik/README.md`). Con la CA
-  instalada, el navegador y k6 validan el certificado sin avisos.
+  `*.universidad.localhost` en `certs/`. Con la CA instalada, el navegador y k6 validan el
+  certificado sin avisos. Ver la sección siguiente.
+
+### La infraestructura de la cátedra (`dockers/`) no está en este repo
+
+`dockers/` es la infraestructura que provee la cátedra (Traefik y ejemplos de MongoDB y
+whoami), igual para todo el curso. **No se versiona a propósito**, por indicación del
+profesor: incluye la clave privada del certificado (`certs/key.pem`), un ejecutable de
+terceros (`mkcert.exe`) y archivos `.env`, y los certificados de mkcert son propios de cada
+máquina. Cada integrante la tiene en su carpeta del proyecto, al lado de este repo.
+
+Lo que este repo necesita de ese Traefik:
+
+| Requisito | Valor |
+|---|---|
+| Red | externa `redutn` |
+| Descubrimiento | proveedor Docker con `exposedByDefault: false` (solo se publica lo que tiene `traefik.enable=true`) |
+| Entrypoints | `http` en 80 con redirección a `https`; `https` en 443 |
+| Certificado | `*.universidad.localhost` en `certs/cert.pem` y `certs/key.pem` |
+
+Para generar los certificados en una máquina nueva, con
+[mkcert](https://github.com/FiloSottile/mkcert) descargado de su página oficial y desde
+`dockers/traefik`:
+
+```bash
+mkcert -install
+mkcert -cert-file certs/cert.pem -key-file certs/key.pem "universidad.localhost" "*.universidad.localhost" 127.0.0.1 ::1
+```
 
   El `curl` de Windows (Schannel) exige comprobar la revocación y los certificados de mkcert
   no la publican (`CRYPT_E_NO_REVOCATION_CHECK`): usar `curl --ssl-no-revoke`, que sigue
