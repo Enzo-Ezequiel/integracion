@@ -11,12 +11,12 @@ profesor](#decisiones-y-respuestas-del-profesor-2026-10-07).
 
 | Servicio | Repo | Imagen | Público |
 |---|---|---|---|
-| orquestador | [vale36/Orquestador](https://github.com/vale36/Orquestador) | `orquestador:1.0.2` | sí, por Traefik: `https://pdf.universidad.localhost` |
-| validacion-pdf | [valentinapenasco/validacion-pdf](https://github.com/valentinapenasco/validacion-pdf) | `validacion-pdf:1.0.1` | no |
+| orquestador | [vale36/Orquestador](https://github.com/vale36/Orquestador) | `orquestador:1.0.3` | sí, por Traefik: `https://pdf.universidad.localhost` |
+| validacion-pdf | [valentinapenasco/validacion-pdf](https://github.com/valentinapenasco/validacion-pdf) | `validacion-pdf:1.0.2` | no |
 | extraccion-texto | [NicolasPerez735/Extraccion-de-texto-pdf-](https://github.com/NicolasPerez735/Extraccion-de-texto-pdf-) | `extraccion-texto:1.0.3` (3 réplicas) | no; la balancea `traefik-interno` |
 | traefik-interno | — | `traefik:v3.6` | no (sin puertos publicados) |
-| persistencia-actualizaciones | [matiasscanoo/persistencia-actualizaciones](https://github.com/matiasscanoo/persistencia-actualizaciones) | `persistencia-actualizaciones:1.0.1` | no |
-| persistencia-consultas | [ManuelGomez33/persistencia-consultas](https://github.com/ManuelGomez33/persistencia-consultas) | `persistencia-consultas:1.0.1` | no |
+| persistencia-actualizaciones | [matiasscanoo/persistencia-actualizaciones](https://github.com/matiasscanoo/persistencia-actualizaciones) | `persistencia-actualizaciones:1.0.2` | no |
+| persistencia-consultas | [ManuelGomez33/persistencia-consultas](https://github.com/ManuelGomez33/persistencia-consultas) | `persistencia-consultas:1.0.2` | no |
 | mongodb | — | `mongo:7.0` (volumen `mongo_data`) | no |
 | redis | — | `redis:7` (volumen `redis_data`) | no |
 
@@ -95,16 +95,17 @@ Los pasos, a mano:
 1. Construir las imágenes con su tag de versión, desde la carpeta grande del proyecto:
 
    ```bash
-   docker build -t validacion-pdf:1.0.1 validacion-pdf
-   docker build -t extraccion-texto:1.0.2 Extraccion-de-texto-pdf-
-   docker build -t persistencia-actualizaciones:1.0.1 persistencia-actualizaciones
-   docker build -t persistencia-consultas:1.0.1 persistencia-consultas
-   docker build -t orquestador:1.0.2 Orquestador
+   docker build -t validacion-pdf:1.0.2 validacion-pdf
+   docker build -t extraccion-texto:1.0.3 Extraccion-de-texto-pdf-
+   docker build -t persistencia-actualizaciones:1.0.2 persistencia-actualizaciones
+   docker build -t persistencia-consultas:1.0.2 persistencia-consultas
+   docker build -t orquestador:1.0.3 Orquestador
    ```
 
-   Estas versiones salen de las ramas `fix/...` de cada repo (ver
-   [Hallazgos](#hallazgos-de-la-integración)). Hasta que se mergeen, construir desde esas
-   ramas; `scripts/levantar.sh` muestra en qué rama está cada repo.
+   Estas versiones implementan el contrato 1.2.0 y salen de las ramas
+   `feat/logs-y-apagado-seguro` (extracción, validación, orquestador) y `feat/contrato-1.2.0`
+   (las dos persistencias). Hasta que se mergeen, construir desde esas ramas;
+   `scripts/levantar.sh` muestra en qué rama está cada repo.
 
 2. Crear la configuración a partir de los ejemplos (no hay secretos; son nombres de la red
    interna):
@@ -476,7 +477,7 @@ Preguntas que llevamos a la clase, la respuesta y qué cambió en el proyecto.
 |---|---|---|
 | ¿Qué escenario usa para la prueba de carga? ¿El `409` de un PDF repetido cuenta como válido? | vegeta con **10 000 peticiones**; el PDF repetido **es válido**. | El `409` ya se contaba como correcto (pasa por validación y extracción completas). **Hecho:** 10 020 peticiones a 30/s, 115 ms promedio, 0 errores (ver [vegeta](#prueba-de-carga-vegeta)). |
 | Docker reparte extracción por conexión y con pocos clientes una réplica queda ociosa. ¿Ruteamos extracción por Traefik aunque no sea pública? | Traefik tiene que balancearlo automáticamente; probar **con y sin cortocircuito**. | **Hecho:** `traefik-interno`, sin puertos publicados; reparto parejo y 37 PDF/s con 5 VUs contra 17 directo. Medido con y sin cortocircuito (ver [Balanceo](#balanceo-de-extracción-con-traefik-interno-contrato-120)). |
-| Con Redis caído el cliente no tenía timeout de conexión. ¿Timeout por variable o fijo en el código? | Sí hay que ponerle timeout, y el **`/health` tiene que verificar si Redis funciona**. | Timeout corto ya está en los dos servicios de persistencia. Contrato 1.2.0: `/health` informa MongoDB y Redis. Pendiente de implementar. |
+| Con Redis caído el cliente no tenía timeout de conexión. ¿Timeout por variable o fijo en el código? | Sí hay que ponerle timeout, y el **`/health` tiene que verificar si Redis funciona**. | Timeout corto en los dos servicios de persistencia. **Hecho:** `/health` informa MongoDB y Redis (ver [`/health` con dependencias](#health-con-dependencias)). |
 | Si Redis se cae y vuelve, ¿hay que recuperar los datos viejos? | No: si Redis se cae no hay por qué conservar los datos. La caché igual se termina borrando. | Ya resuelto: Redis corre sin persistencia y arranca vacío. |
 
 ### Por qué no se guarda el PDF
@@ -513,8 +514,23 @@ estado vive en un servicio de apoyo compartido.
 
 - **Logs (obligatorio, 12-Factor XI):** a `stdout`, niveles `DEBUG`/`INFO`/`WARNING`/`ERROR`,
   configuración en un `logging.json` por repo y sin datos sensibles. Qué va en cada nivel está
-  en el [contrato](CONTRATO.md#logs). **Hecho en extracción** (`1.0.3`); falta en los otros
-  cuatro repos.
+  en el [contrato](CONTRATO.md#logs). **Hecho en los cinco servicios.** Cada uno registra
+  en `INFO` su paso del flujo: validación aceptada (`tamano_bytes`), texto extraído
+  (`paginas`, `checksum`), documento creado (`id`), caché `HIT`/`MISS`. Ningún log tiene el
+  nombre del archivo, el texto ni el Base64: se comprobó subiendo `demo-de-juan-perez.pdf` y
+  buscando `juan-perez` en `docker compose logs` (0 resultados).
+
+  Recorrido real de un `POST /pdf` (2026-10-07, `docker compose logs | grep <id>`, ordenado):
+
+  ```text
+  orquestador      INFO ... correlation_id=75c93b70-... validacion aceptada
+  validacion-pdf   INFO ... correlation_id=75c93b70-... pdf valido tamano_bytes=11378
+  extraccion-texto INFO ... correlation_id=75c93b70-... texto extraido paginas=10 tamano_bytes=11378 caracteres=36839 checksum=7e72f0...
+  orquestador      INFO ... correlation_id=75c93b70-... texto extraido paginas=10 checksum=7e72f0...
+  actualizaciones  INFO ... correlation_id=75c93b70-... documento creado id=13f4459b-... checksum=7e72f0...
+  orquestador      INFO ... correlation_id=75c93b70-... documento creado id=13f4459b-... checksum=7e72f0...
+  orquestador      INFO ... correlation_id=75c93b70-... method=POST path=/pdf status=201 duracion_ms=117.1
+  ```
 - **Trazas:** con réplicas no se sabe qué instancia atendió cada paso; el `correlation_id` es el
   identificador único de cada petición y permite seguirla por todos los servicios:
   `docker compose logs | grep <correlation_id>`. Ya implementado.
@@ -530,15 +546,30 @@ escritura a medias. El contrato 1.2.0 fija qué hace cada servicio: dejar de ace
 terminar lo que está en curso, cerrar las conexiones y salir con código 0, todo registrado en
 los logs. En el compose, `stop_grace_period: 40s` en los cinco servicios.
 
-**Hecho en extracción** (`1.0.3`, `--timeout-graceful-shutdown 30`) y probado:
+**Hecho en los cinco servicios** (`--timeout-graceful-shutdown 30`, cierre de httpx, MongoDB
+y Redis en el `lifespan`) y probado:
 
-- Solo: extracción de 18 s y `docker stop -t 40` a los 4 s → la request termina con `200`, una
-  conexión nueva se rechaza, `ExitCode` 0 y en los logs `Shutting down` → la extracción termina
-  → `apagado iniciado` → `apagado completo`.
-- En el stack: `docker stop` de una réplica con 5 VUs de carga → 100 % de checks, `ExitCode` 0
-  (ver [Balanceo](#balanceo-de-extracción-con-traefik-interno-contrato-120)).
+- Extracción sola: extracción de 18 s y `docker stop -t 40` a los 4 s → la request termina con
+  `200`, una conexión nueva se rechaza, `ExitCode` 0 y en los logs `Shutting down` → la
+  extracción termina → `apagado iniciado` → `apagado completo`.
+- En el stack: `docker stop` de una réplica de extracción con 5 VUs de carga → 100 % de checks,
+  `ExitCode` 0 (ver [Balanceo](#balanceo-de-extracción-con-traefik-interno-contrato-120)).
+- Todo el stack: `docker compose stop` de los cinco servicios (7 contenedores) → los 7 con
+  `ExitCode` 0 y `apagado completo` en su log.
 
-Falta en los otros cuatro repos (validación, orquestador y las dos persistencias).
+### `/health` con dependencias
+
+Las dos persistencias consultan MongoDB y Redis en `/health` (contrato 1.2.0). Probado en el
+stack (2026-10-07):
+
+| Situación | `persistencia-actualizaciones` y `persistencia-consultas` |
+|---|---|
+| Todo arriba | `200 {"status":"ok","dependencias":{"mongodb":"ok","redis":"ok"}}` en ~8 ms |
+| Redis detenido | `200 {"status":"ok","dependencias":{"mongodb":"ok","redis":"caido"}}`: siguen funcionando (fail-open) |
+| MongoDB detenido | `503 {"status":"error","dependencias":{"mongodb":"caido","redis":"ok"}}` en 1,0 s; `POST /pdf` del orquestador → `503` |
+
+Validación, extracción y el orquestador no tienen servicios de apoyo y responden
+`{"status": "ok"}`.
 
 ### Swagger
 
@@ -563,9 +594,6 @@ que el `/health` del servicio responda.
   estado que deba sobrevivir a un reinicio (12-Factor VI), así que arranca vacío. Queda la
   ventana mientras Redis está caído *y no se reinicia* (por ejemplo, una partición de red),
   acotada por el TTL.
-- **Contrato 1.2.0 a medias:** extracción ya tiene logs y finalización segura. Faltan en
-  validación, orquestador y las dos persistencias, junto con el `/health` con dependencias de
-  las persistencias.
 - **Orquestador fuera de Traefik al saturarse.** Con más carga que capacidad, su healthcheck
   (timeout 2 s, 3 reintentos) falla, Docker lo marca `unhealthy` y Traefik lo saca (`404`).
   Se podría dar más margen al healthcheck; la solución real es no superar ~35/s o sumar
@@ -578,8 +606,12 @@ que el `/health` del servicio responda.
   pero el servidor no cancela la extracción en curso: bajo carga, un timeout multiplica por
   `RETRY_ATTEMPTS + 1` el trabajo de extracción. Conviene un `REQUEST_TIMEOUT_SECONDS` con
   margen sobre el p95 medido.
-- **Consultas no registra si fue HIT o MISS**; solo se ve en `duracion_ms`. El contrato 1.2.0
-  lo pide en `INFO`.
-- **Falta repetir la carga con `orquestador:1.0.2`**, que reenvía `X-Extraction-Time-Ms`
-  (contrato 1.1.0), para tener la columna de extracción medida con el header.
+- **Consultas no registraba si fue HIT o MISS:** **resuelto** en `persistencia-consultas:1.0.2`
+  (`cache HIT`/`cache MISS` en `INFO`).
+- **Tiempo de extracción con el header:** medido con `orquestador:1.0.3` y PDFs nuevos
+  (semilla `n`, 1 VU): `tiempo_extraccion_ms` 110 ms promedio (10 altas), total 147 ms. El
+  header solo viene en los `201`: con PDFs repetidos (`409`) la extracción se ve en el log de
+  `extraccion-texto` (`duracion_ms`).
+- **El orquestador puede pasar los 30 s de gracia** en su peor caso (tres intentos de 10 s):
+  si el apagado lo corta, el documento queda guardado completo y reenviar el PDF da `409`.
 - **Sin métricas ni paneles** (Grafana, Elasticsearch): opcionales según el profesor.
