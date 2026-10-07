@@ -6,10 +6,10 @@ MongoDB y Redis reales, y documenta las pruebas de integración.
 | Servicio | Repo | Imagen | Público |
 |---|---|---|---|
 | orquestador | [vale36/Orquestador](https://github.com/vale36/Orquestador) | `orquestador:1.0.1` | sí, por Traefik: `https://pdf.universidad.localhost` |
-| validacion-pdf | [valentinapenasco/validacion-pdf](https://github.com/valentinapenasco/validacion-pdf) | `validacion-pdf:1.0.0` | no |
-| extraccion-texto | [NicolasPerez735/Extraccion-de-texto-pdf-](https://github.com/NicolasPerez735/Extraccion-de-texto-pdf-) | `extraccion-texto:1.0.0` | no |
-| persistencia-actualizaciones | [matiasscanoo/persistencia-actualizaciones](https://github.com/matiasscanoo/persistencia-actualizaciones) | `persistencia-actualizaciones:1.0.0` | no |
-| persistencia-consultas | [ManuelGomez33/persistencia-consultas](https://github.com/ManuelGomez33/persistencia-consultas) | `persistencia-consultas:1.0.0` | no |
+| validacion-pdf | [valentinapenasco/validacion-pdf](https://github.com/valentinapenasco/validacion-pdf) | `validacion-pdf:1.0.1` | no |
+| extraccion-texto | [NicolasPerez735/Extraccion-de-texto-pdf-](https://github.com/NicolasPerez735/Extraccion-de-texto-pdf-) | `extraccion-texto:1.0.2` | no |
+| persistencia-actualizaciones | [matiasscanoo/persistencia-actualizaciones](https://github.com/matiasscanoo/persistencia-actualizaciones) | `persistencia-actualizaciones:1.0.1` | no |
+| persistencia-consultas | [ManuelGomez33/persistencia-consultas](https://github.com/ManuelGomez33/persistencia-consultas) | `persistencia-consultas:1.0.1` | no |
 | mongodb | — | `mongo:7.0` (volumen `mongo_data`) | no |
 | redis | — | `redis:7` (volumen `redis_data`) | no |
 
@@ -63,15 +63,16 @@ Los pasos, a mano:
 1. Construir las imágenes con su tag de versión, desde la carpeta grande del proyecto:
 
    ```bash
-   docker build -t validacion-pdf:1.0.0 validacion-pdf
-   docker build -t extraccion-texto:1.0.0 Extraccion-de-texto-pdf-
-   docker build -t persistencia-actualizaciones:1.0.0 persistencia-actualizaciones
-   docker build -t persistencia-consultas:1.0.0 persistencia-consultas
+   docker build -t validacion-pdf:1.0.1 validacion-pdf
+   docker build -t extraccion-texto:1.0.2 Extraccion-de-texto-pdf-
+   docker build -t persistencia-actualizaciones:1.0.1 persistencia-actualizaciones
+   docker build -t persistencia-consultas:1.0.1 persistencia-consultas
    docker build -t orquestador:1.0.1 Orquestador
    ```
 
-   `orquestador:1.0.1` sale de la rama `fix/fechas-milisegundos` (ver
-   [Hallazgos](#hallazgos-de-la-integración)). Hasta que se mergee, construirlo desde esa rama.
+   Estas versiones salen de las ramas `fix/...` de cada repo (ver
+   [Hallazgos](#hallazgos-de-la-integración)). Hasta que se mergeen, construir desde esas
+   ramas; `scripts/levantar.sh` muestra en qué rama está cada repo.
 
 2. Crear la configuración a partir de los ejemplos (no hay secretos; son nombres de la red
    interna):
@@ -248,9 +249,24 @@ Lectura:
 - **Contra el profesor (440 ms):** con 3 réplicas el promedio queda en 120 ms con 5 VUs y en
   243 ms con 10 VUs (p95 417 ms). Su máquina, sus PDFs y su concurrencia no son los mismos:
   hay que repetirlo con su escenario cuando lo tengamos.
-- **Reparto entre réplicas:** con 1 VU, todo va a una sola réplica (272 de 272): httpx
-  reutiliza la conexión keep-alive y el DNS de Docker reparte por conexión, no por request.
-  Con 5 o más VUs se reparte parejo (442 / 448 / 361).
+- **Reparto entre réplicas y resultados bimodales.** El orquestador (httpx) reutiliza
+  conexiones keep-alive y el DNS de Docker elige réplica *por conexión*, no por request. Cada
+  VU termina usando una conexión fija: con 1 VU todo va a una réplica (272 de 272), y con 5
+  VUs hay un 39 % de probabilidad (3·(2/3)⁵) de que alguna réplica no reciba ninguna
+  conexión. Se vio en las mediciones: con las 3 réplicas en uso, 5 VUs dan 36–40 PDF/s;
+  cuando una queda afuera (reparto 394 / 326 / 0), 24–25 PDF/s. Con 10 VUs la probabilidad
+  baja a ~5 % y se mantiene en 40–42 PDF/s. **Para medir:** reiniciar el orquestador antes de
+  cada corrida y revisar el reparto (`docker compose logs extraccion-texto`). **Para
+  arreglarlo** (decisión del grupo): rutear orquestador → extracción por Traefik, que balancea
+  por request, o limitar el keep-alive del cliente httpx hacia extracción.
+- **Python 3.11 contra 3.12 en extracción** (misma base Debian 13, 1 VU, que es reproducible):
+  extracción 88–92 ms con 3.11 y 97–98 ms con 3.12; total 116–119 ms contra 123–124 ms. Por
+  eso `extraccion-texto:1.0.2` usa `python:3.11-slim`.
+- **Con las imágenes finales** (`extraccion-texto:1.0.2`, 3 réplicas en uso, por Traefik):
+  5 VUs → 131–137 ms promedio, p95 ~245 ms, 36–38 PDF/s; 10 VUs → 236–247 ms promedio,
+  p95 350–425 ms, 40–42 PDF/s. La máquina rindió algo menos que a la mañana (1.0.0 dio entre
+  24 y 40 PDF/s en las mismas condiciones), así que las comparaciones finas hay que hacerlas
+  en la misma sesión.
 
 ## Prueba de carga (vegeta)
 
@@ -292,39 +308,50 @@ Corre Grype como contenedor (`anchore/grype`, base de vulnerabilidades en el vol
 `grype-db`) sobre las cinco imágenes del `.env` y escribe `seguridad/resumen.md`. Los JSON
 completos quedan en `seguridad/` sin versionar.
 
-Resultado del 2026-10-07 (Grype 0.120.1):
+Resultado del 2026-10-07 (Grype 0.120.1), antes y después de los arreglos:
 
-| Imagen | Base | Critical | High | Medium | Total | Con arreglo |
-|---|---|---|---|---|---|---|
-| `extraccion-texto:1.0.0` | Debian 12 | **16** | 136 | 145 | 421 | 163 |
-| `orquestador:1.0.1` | Debian 13 | 0 | 55 | 59 | 172 | 13 |
-| `persistencia-actualizaciones:1.0.0` | Debian 13 | 0 | 59 | 62 | 179 | 20 |
-| `persistencia-consultas:1.0.0` | Debian 13 | 0 | 61 | 67 | 191 | 32 |
-| `validacion-pdf:1.0.0` | Debian 13 | 0 | 67 | 67 | 200 | 41 |
+| Imagen antes | Base | Critical | High | Total | → | Imagen después | Base | Critical | High | Total |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `extraccion-texto:1.0.0` | Debian 12 | **16** | 136 | 421 | → | `extraccion-texto:1.0.2` | Debian 13 | 0 | 56 | 174 |
+| `persistencia-actualizaciones:1.0.0` | Debian 13 | 0 | 59 | 179 | → | `persistencia-actualizaciones:1.0.1` | Debian 13 | 0 | 57 | 176 |
+| `persistencia-consultas:1.0.0` | Debian 13 | 0 | 61 | 191 | → | `persistencia-consultas:1.0.1` | Debian 13 | 0 | 57 | 185 |
+| `validacion-pdf:1.0.0` | Debian 13 | 0 | 67 | 200 | → | `validacion-pdf:1.0.1` | Debian 13 | 0 | 57 | 176 |
+| `orquestador:1.0.1` | Debian 13 | 0 | 55 | 172 | → | `orquestador:1.0.1` | Debian 13 | 0 | 55 | 172 |
 
-Lectura:
+Qué se arregló (detalle en [Hallazgos](#hallazgos-de-la-integración)):
 
-- **Extracción concentra los 16 Critical** porque su imagen base es
-  `ghcr.io/astral-sh/uv:python3.11-bookworm-slim` (Debian 12, con openssl, gnutls, perl y
-  glibc más viejos). Las otras cuatro usan `python:3.1x-slim` (Debian 13). Cambiar la base
-  a `python:3.12-slim` + el binario de uv, como hacen los demás, elimina la mayoría.
-- **El resto de High y Medium son paquetes del sistema operativo** de la imagen base, casi
-  todos sin arreglo publicado todavía. Se resuelven reconstruyendo cuando Debian publique.
-- **Dependencias de Python con arreglo disponible:**
-  - `validacion-pdf`: `starlette` 0.47.3 (High; arreglo en 0.49.1 o posterior), que llega
-    por `fastapi==0.136.0`: se arregla subiendo FastAPI. Y `python-multipart` 0.0.26 (High;
-    arreglo en 0.0.27 o posterior), declarada directamente en `pyproject.toml` pero sin uso
-    en `app/` (no hay `UploadFile` ni `Form`): conviene quitarla (YAGNI).
-  - `persistencia-consultas`: `pymongo` 4.18.1 (High; arreglo en 4.18.2).
-  - `extraccion-texto` y `persistencia-actualizaciones`: `wheel` 0.45.1 y
-    `jaraco-context` 5.3.0 (High), que vienen con el `setuptools` del Python de la imagen,
-    no del proyecto.
-  - Todas: `pip` de la imagen base (Medium/Low). Los servicios usan uv, no pip.
+- **Los 16 Critical de extracción** venían de su base `uv:python3.11-bookworm-slim`
+  (Debian 12: openssl, gnutls, perl, glibc). Ahora usa `python:3.11-slim` (Debian 13).
+- **Las vulnerabilidades High de paquetes de Python** quedaron en cero en las cinco imágenes:
+  `starlette` y `python-multipart` (validación), `pymongo` (consultas), y `wheel` y
+  `jaraco-context` del `setuptools` preinstalado en `python:3.11-slim` (extracción y
+  actualizaciones).
+
+Qué queda:
+
+- **~55 High por imagen, todas del sistema operativo Debian 13** (las mismas en las cinco,
+  porque comparten base). Casi ninguna tiene arreglo publicado todavía: se resuelven
+  reconstruyendo las imágenes cuando Debian publique las versiones corregidas
+  (`./scripts/levantar.sh` reconstruye todo y `./scripts/grype.sh` lo verifica).
+- `pip` de la imagen base (Medium/Low). Los servicios instalan con uv, no con pip.
 
 Snyk queda para el final, con la cuenta de la facultad (es web).
 
 ## Hallazgos de la integración
 
+- **Vulnerabilidades corregidas** (Grype, ver arriba), cada una en una rama del repo de su
+  dueño, con la suite en verde:
+  - `Extraccion-de-texto-pdf-` (`fix/imagen-base-debian13`): base `python:3.11-slim`
+    (Debian 13) en lugar de `uv:python3.11-bookworm-slim` (Debian 12, 16 Critical), y sin
+    `setuptools`/`wheel` en el Python base. Imagen `1.0.2`.
+  - `persistencia-actualizaciones` (`fix/imagen-sin-setuptools`): base `python:3.12-slim`,
+    que no trae `setuptools`/`wheel`. Suite de 164 tests (con MongoDB y Redis reales) en
+    verde con 3.12. Imagen `1.0.1`.
+  - `validacion-pdf` (`fix/dependencias-vulnerables`): sin `python-multipart` (no se usaba),
+    `starlette` 0.47.3 → 1.7.0, `pydantic-settings` 2.14.0 → 2.14.2 y `.dockerignore` nuevo
+    (antes entraba `app/__pycache__` en la imagen). Imagen `1.0.1`.
+  - `persistencia-consultas` (`fix/pymongo-vulnerable`): `pymongo` 4.18.1 → 4.18.2.
+    Imagen `1.0.1`.
 - **Fechas del orquestador con microsegundos.** `POST /pdf` devolvía `created_at` como
   `…47.787000Z`, mientras actualizaciones y consultas devuelven `…47.787Z` (A15). Se arregló
   con TDD en la rama `fix/fechas-milisegundos` de Orquestador: dos commits rojos y el
@@ -342,7 +369,8 @@ Snyk queda para el final, con la cuenta de la facultad (es web).
   listado viejo hasta que vence `REDIS_TTL_SECONDS` (se comprobó: 217 s con el nombre
   anterior). Mitigaciones posibles: Redis sin persistencia (es solo caché) o un TTL más corto.
 - **Traefik no balancea extracción.** Solo el orquestador pasa por Traefik; el reparto entre
-  las 3 réplicas de extracción lo hace el DNS de Docker por conexión (ver carga).
+  las 3 réplicas de extracción lo hace el DNS de Docker por conexión, y con pocos clientes
+  puede quedar una réplica ociosa (ver "Reparto entre réplicas" en la carga).
 - **Vulnerabilidades de las imágenes** (ver Grype): base Debian 12 en extracción y
   dependencias de Python con arreglo disponible en validación y consultas. Lo arregla cada
   dueño en su repo.
