@@ -31,6 +31,10 @@ services:
     image: extraccion-texto:${EXTRACCION_VERSION:?definir en .env}
     env_file: ./env/extraccion.env
     networks: [redutn]
+    # pypdf corre en el threadpool y compite por el GIL: un proceso no pasa de ~8 PDF/s.
+    # Con 3 réplicas se llega a ~41 PDF/s (ver README, "Prueba de carga").
+    deploy:
+      replicas: 3
     restart: unless-stopped
 
   persistencia-actualizaciones:
