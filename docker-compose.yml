@@ -24,12 +24,14 @@ services:
         condition: service_healthy
       persistencia-consultas:
         condition: service_healthy
+    stop_grace_period: 40s
     restart: unless-stopped
 
   validacion-pdf:
     image: validacion-pdf:${VALIDACION_VERSION:?definir en .env}
     env_file: ./env/validacion.env
     networks: [redutn]
+    stop_grace_period: 40s
     restart: unless-stopped
 
   extraccion-texto:
@@ -40,6 +42,7 @@ services:
     # Con 3 réplicas se llega a ~41 PDF/s (ver README, "Prueba de carga").
     deploy:
       replicas: 3
+    stop_grace_period: 40s
     restart: unless-stopped
 
   persistencia-actualizaciones:
@@ -53,6 +56,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    stop_grace_period: 40s
     restart: unless-stopped
 
   persistencia-consultas:
@@ -64,6 +68,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    stop_grace_period: 40s
     restart: unless-stopped
 
   # MongoDB y Redis no publican puertos: Traefik usa 27017 y 6379 como entrypoints TCP.
