@@ -294,3 +294,17 @@ Generado el 2026-10-07 con `scripts/grype.sh`.
 | `validacion-pdf:1.0.1` | High | CVE-2026-95619 | `libgcc-s1` 14.2.0-19 (deb) | sin arreglo |
 | `validacion-pdf:1.0.1` | High | CVE-2026-95619 | `libstdc++6` 14.2.0-19 (deb) | sin arreglo |
 | `validacion-pdf:1.0.1` | High | GHSA-4w2j-m93h-cj5j | `quinn-proto` 0.11.14 (rust-crate) | 0.11.15 |
+
+## Snyk (2026-10-07)
+
+Importado desde GitHub: Snyk solo analiza el `Dockerfile` (no lee `uv.lock`). Los cinco
+servicios dan lo mismo (3 Critical, 11 High, 5 Medium, 106 Low) porque comparten la base
+`python:3.1x-slim` (Debian 13): las vulnerabilidades son del sistema base, no del código.
+
+Las 3 Critical son de `perl-base` 5.40.1-6 (CVE-2026-8376, CVE-2026-13221, CVE-2026-42496),
+sin exploit conocido y **con arreglo** en 5.40.1-6+deb13u1. Snyk compara contra su registro de
+la imagen base; las imágenes construidas de verdad ya traen el paquete corregido (Grype: 0
+Critical). Para garantizarlo, `scripts/levantar.sh` construye con `docker build --pull`.
+
+Las High restantes no tienen versión corregida en Debian: quedan declaradas como deuda técnica
+hasta que Debian publique el arreglo.

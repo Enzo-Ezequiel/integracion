@@ -65,7 +65,8 @@ if [ "$CONSTRUIR" = si ]; then
     IFS='|' read -r servicio repo variable <<<"$linea"
     imagen="$servicio:${!variable}"
     echo "$imagen  ←  $repo"
-    docker build -q -t "$imagen" "$RAIZ/$repo" >/dev/null
+    # --pull: siempre la versión actual de la imagen base, con los parches de Debian.
+    docker build --pull -q -t "$imagen" "$RAIZ/$repo" >/dev/null
   done
 fi
 
