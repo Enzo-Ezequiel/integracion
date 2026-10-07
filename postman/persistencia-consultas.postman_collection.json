@@ -1,0 +1,292 @@
+{
+  "info": {
+    "name": "persistencia-consultas",
+    "description": "GET /pdf, /pdf/{id} y /pdf/checksum/{checksum}. Este servicio no crea documentos: el listado toma el primero (si hay) para las consultas por id y checksum.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "GET /health",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set('correlationId', pm.variables.replaceIn('{{$guid}}'));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 200', () => pm.response.to.have.status(200));",
+              "pm.test('status ok', () => pm.expect(pm.response.json().status).to.eql('ok'));",
+              "pm.test('devuelve el X-Correlation-ID enviado', () => {",
+              "  pm.expect(pm.response.headers.get('X-Correlation-ID')).to.eql(pm.variables.get('correlationId'));",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-Correlation-ID",
+            "value": "{{correlationId}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseURL}}/health",
+          "host": [
+            "{{baseURL}}"
+          ],
+          "path": [
+            "health"
+          ]
+        },
+        "description": ""
+      }
+    },
+    {
+      "name": "GET /pdf - listado paginado",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set('correlationId', pm.variables.replaceIn('{{$guid}}'));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 200', () => pm.response.to.have.status(200));",
+              "const r = pm.response.json();",
+              "pm.test('forma del listado', () => {",
+              "  pm.expect(r).to.have.all.keys('items', 'total', 'limit', 'offset');",
+              "  pm.expect(r.limit).to.eql(20);",
+              "  pm.expect(r.offset).to.eql(0);",
+              "});",
+              "if (r.items.length) {",
+              "  pm.collectionVariables.set('documentoId', r.items[0].id);",
+              "  pm.collectionVariables.set('checksum', r.items[0].checksum);",
+              "}",
+              "pm.test('devuelve el X-Correlation-ID enviado', () => {",
+              "  pm.expect(pm.response.headers.get('X-Correlation-ID')).to.eql(pm.variables.get('correlationId'));",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-Correlation-ID",
+            "value": "{{correlationId}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseURL}}/pdf?limit=20&offset=0",
+          "host": [
+            "{{baseURL}}"
+          ],
+          "path": [
+            "pdf"
+          ],
+          "query": [
+            {
+              "key": "limit",
+              "value": "20"
+            },
+            {
+              "key": "offset",
+              "value": "0"
+            }
+          ]
+        },
+        "description": ""
+      }
+    },
+    {
+      "name": "GET /pdf/{id}",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set('correlationId', pm.variables.replaceIn('{{$guid}}'));",
+              "if (!pm.collectionVariables.get('documentoId')) { pm.execution.skipRequest(); }"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 200', () => pm.response.to.have.status(200));",
+              "pm.test('documento del modelo común', () => {",
+              "  const d = pm.response.json();",
+              "  pm.expect(d).to.include.all.keys('id', 'nombre', 'checksum', 'texto', 'tamano_bytes', 'paginas', 'created_at', 'updated_at');",
+              "  pm.expect(d.created_at).to.match(/^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$/);",
+              "});",
+              "pm.test('devuelve el X-Correlation-ID enviado', () => {",
+              "  pm.expect(pm.response.headers.get('X-Correlation-ID')).to.eql(pm.variables.get('correlationId'));",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-Correlation-ID",
+            "value": "{{correlationId}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseURL}}/pdf/{{documentoId}}",
+          "host": [
+            "{{baseURL}}"
+          ],
+          "path": [
+            "pdf",
+            "{{documentoId}}"
+          ]
+        },
+        "description": ""
+      }
+    },
+    {
+      "name": "GET /pdf/checksum/{checksum}",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set('correlationId', pm.variables.replaceIn('{{$guid}}'));",
+              "if (!pm.collectionVariables.get('checksum')) { pm.execution.skipRequest(); }"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 200', () => pm.response.to.have.status(200));",
+              "pm.test('documento del modelo común', () => {",
+              "  const d = pm.response.json();",
+              "  pm.expect(d).to.include.all.keys('id', 'nombre', 'checksum', 'texto', 'tamano_bytes', 'paginas', 'created_at', 'updated_at');",
+              "  pm.expect(d.created_at).to.match(/^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$/);",
+              "});",
+              "pm.test('mismo checksum', () => pm.expect(pm.response.json().checksum).to.eql(pm.collectionVariables.get('checksum')));",
+              "pm.test('devuelve el X-Correlation-ID enviado', () => {",
+              "  pm.expect(pm.response.headers.get('X-Correlation-ID')).to.eql(pm.variables.get('correlationId'));",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-Correlation-ID",
+            "value": "{{correlationId}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseURL}}/pdf/checksum/{{checksum}}",
+          "host": [
+            "{{baseURL}}"
+          ],
+          "path": [
+            "pdf",
+            "checksum",
+            "{{checksum}}"
+          ]
+        },
+        "description": ""
+      }
+    },
+    {
+      "name": "GET /pdf/{id} inexistente → 404 RESOURCE_NOT_FOUND",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set('correlationId', pm.variables.replaceIn('{{$guid}}'));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 404', () => pm.response.to.have.status(404));",
+              "pm.test('error con el formato común', () => {",
+              "  const e = pm.response.json().error;",
+              "  pm.expect(e.code).to.eql('RESOURCE_NOT_FOUND');",
+              "  pm.expect(e).to.have.all.keys('code', 'message', 'details', 'correlation_id');",
+              "  pm.expect(e.correlation_id).to.eql(pm.variables.get('correlationId'));",
+              "});",
+              "pm.test('devuelve el X-Correlation-ID enviado', () => {",
+              "  pm.expect(pm.response.headers.get('X-Correlation-ID')).to.eql(pm.variables.get('correlationId'));",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-Correlation-ID",
+            "value": "{{correlationId}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseURL}}/pdf/00000000-0000-4000-8000-000000000000",
+          "host": [
+            "{{baseURL}}"
+          ],
+          "path": [
+            "pdf",
+            "00000000-0000-4000-8000-000000000000"
+          ]
+        },
+        "description": ""
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseURL",
+      "value": "http://localhost:8000"
+    },
+    {
+      "key": "documentoId",
+      "value": ""
+    },
+    {
+      "key": "checksum",
+      "value": ""
+    }
+  ]
+}

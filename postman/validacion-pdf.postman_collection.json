@@ -1,0 +1,251 @@
+{
+  "info": {
+    "name": "validacion-pdf",
+    "description": "POST /validar del contrato microservicios-pdf v1.0.0.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "GET /health",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set('correlationId', pm.variables.replaceIn('{{$guid}}'));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 200', () => pm.response.to.have.status(200));",
+              "pm.test('status ok', () => pm.expect(pm.response.json().status).to.eql('ok'));",
+              "pm.test('devuelve el X-Correlation-ID enviado', () => {",
+              "  pm.expect(pm.response.headers.get('X-Correlation-ID')).to.eql(pm.variables.get('correlationId'));",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-Correlation-ID",
+            "value": "{{correlationId}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseURL}}/health",
+          "host": [
+            "{{baseURL}}"
+          ],
+          "path": [
+            "health"
+          ]
+        },
+        "description": ""
+      }
+    },
+    {
+      "name": "POST /validar - PDF válido",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set('correlationId', pm.variables.replaceIn('{{$guid}}'));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 200', () => pm.response.to.have.status(200));",
+              "pm.test('valido y tamaño', () => {",
+              "  const r = pm.response.json();",
+              "  pm.expect(r.valido).to.eql(true);",
+              "  pm.expect(r.nombre).to.eql('contrato.pdf');",
+              "  pm.expect(r.tamano_bytes).to.be.above(0);",
+              "});",
+              "pm.test('devuelve el X-Correlation-ID enviado', () => {",
+              "  pm.expect(pm.response.headers.get('X-Correlation-ID')).to.eql(pm.variables.get('correlationId'));",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-Correlation-ID",
+            "value": "{{correlationId}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseURL}}/validar",
+          "host": [
+            "{{baseURL}}"
+          ],
+          "path": [
+            "validar"
+          ]
+        },
+        "description": "",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"archivo_base64\": \"{{pdfBase64}}\",\n  \"nombre\": \"contrato.pdf\"\n}"
+        }
+      }
+    },
+    {
+      "name": "POST /validar - no es PDF → 422 PDF_INVALID",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set('correlationId', pm.variables.replaceIn('{{$guid}}'));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 422', () => pm.response.to.have.status(422));",
+              "pm.test('error con el formato común', () => {",
+              "  const e = pm.response.json().error;",
+              "  pm.expect(e.code).to.eql('PDF_INVALID');",
+              "  pm.expect(e).to.have.all.keys('code', 'message', 'details', 'correlation_id');",
+              "  pm.expect(e.correlation_id).to.eql(pm.variables.get('correlationId'));",
+              "});",
+              "pm.test('valido false', () => pm.expect(pm.response.json().valido).to.eql(false));",
+              "pm.test('devuelve el X-Correlation-ID enviado', () => {",
+              "  pm.expect(pm.response.headers.get('X-Correlation-ID')).to.eql(pm.variables.get('correlationId'));",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-Correlation-ID",
+            "value": "{{correlationId}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseURL}}/validar",
+          "host": [
+            "{{baseURL}}"
+          ],
+          "path": [
+            "validar"
+          ]
+        },
+        "description": "",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"archivo_base64\": \"{{noPdfBase64}}\",\n  \"nombre\": \"texto.pdf\"\n}"
+        }
+      }
+    },
+    {
+      "name": "POST /validar - sin nombre → 400 VALIDATION_ERROR",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set('correlationId', pm.variables.replaceIn('{{$guid}}'));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 400', () => pm.response.to.have.status(400));",
+              "pm.test('error con el formato común', () => {",
+              "  const e = pm.response.json().error;",
+              "  pm.expect(e.code).to.eql('VALIDATION_ERROR');",
+              "  pm.expect(e).to.have.all.keys('code', 'message', 'details', 'correlation_id');",
+              "  pm.expect(e.correlation_id).to.eql(pm.variables.get('correlationId'));",
+              "});",
+              "pm.test('devuelve el X-Correlation-ID enviado', () => {",
+              "  pm.expect(pm.response.headers.get('X-Correlation-ID')).to.eql(pm.variables.get('correlationId'));",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-Correlation-ID",
+            "value": "{{correlationId}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseURL}}/validar",
+          "host": [
+            "{{baseURL}}"
+          ],
+          "path": [
+            "validar"
+          ]
+        },
+        "description": "",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"archivo_base64\": \"{{pdfBase64}}\"\n}"
+        }
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseURL",
+      "value": "http://localhost:8000"
+    },
+    {
+      "key": "pdfBase64",
+      "value": "JVBERi0xLjMKJZOMi54gUmVwb3J0TGFiIEdlbmVyYXRlZCBQREYgZG9jdW1lbnQgKG9wZW5zb3VyY2UpCjEgMCBvYmoKPDwKL0YxIDIgMCBSCj4+CmVuZG9iagoyIDAgb2JqCjw8Ci9CYXNlRm9udCAvSGVsdmV0aWNhIC9FbmNvZGluZyAvV2luQW5zaUVuY29kaW5nIC9OYW1lIC9GMSAvU3VidHlwZSAvVHlwZTEgL1R5cGUgL0ZvbnQKPj4KZW5kb2JqCjMgMCBvYmoKPDwKL0NvbnRlbnRzIDggMCBSIC9NZWRpYUJveCBbIDAgMCA1OTUuMjc1NiA4NDEuODg5OCBdIC9QYXJlbnQgNyAwIFIgL1Jlc291cmNlcyA8PAovRm9udCAxIDAgUiAvUHJvY1NldCBbIC9QREYgL1RleHQgL0ltYWdlQiAvSW1hZ2VDIC9JbWFnZUkgXQo+PiAvUm90YXRlIDAgL1RyYW5zIDw8Cgo+PiAKICAvVHlwZSAvUGFnZQo+PgplbmRvYmoKNCAwIG9iago8PAovQ29udGVudHMgOSAwIFIgL01lZGlhQm94IFsgMCAwIDU5NS4yNzU2IDg0MS44ODk4IF0gL1BhcmVudCA3IDAgUiAvUmVzb3VyY2VzIDw8Ci9Gb250IDEgMCBSIC9Qcm9jU2V0IFsgL1BERiAvVGV4dCAvSW1hZ2VCIC9JbWFnZUMgL0ltYWdlSSBdCj4+IC9Sb3RhdGUgMCAvVHJhbnMgPDwKCj4+IAogIC9UeXBlIC9QYWdlCj4+CmVuZG9iago1IDAgb2JqCjw8Ci9QYWdlTW9kZSAvVXNlTm9uZSAvUGFnZXMgNyAwIFIgL1R5cGUgL0NhdGFsb2cKPj4KZW5kb2JqCjYgMCBvYmoKPDwKL0F1dGhvciAoYW5vbnltb3VzKSAvQ3JlYXRpb25EYXRlIChEOjIwMjYxMDA3MTIyMDM5LTAzJzAwJykgL0NyZWF0b3IgKGFub255bW91cykgL0tleXdvcmRzICgpIC9Nb2REYXRlIChEOjIwMjYxMDA3MTIyMDM5LTAzJzAwJykgL1Byb2R1Y2VyIChSZXBvcnRMYWIgUERGIExpYnJhcnkgLSBcKG9wZW5zb3VyY2VcKSkgCiAgL1N1YmplY3QgKHVuc3BlY2lmaWVkKSAvVGl0bGUgKHVudGl0bGVkKSAvVHJhcHBlZCAvRmFsc2UKPj4KZW5kb2JqCjcgMCBvYmoKPDwKL0NvdW50IDIgL0tpZHMgWyAzIDAgUiA0IDAgUiBdIC9UeXBlIC9QYWdlcwo+PgplbmRvYmoKOCAwIG9iago8PAovRmlsdGVyIFsgL0FTQ0lJODVEZWNvZGUgL0ZsYXRlRGVjb2RlIF0gL0xlbmd0aCAxNDIKPj4Kc3RyZWFtCkdhcEEwWW11QD4nTDonOllJTD9wVFI/c1wlYWctTGlWYyM/Xzo3KyQ2QjBsQDFiTnU1XFVxXkJeUDJsREVrRFwrVSdvQmkzY3NBX2VZJUM7b0leJGBUbyVUPWNULVlsUkIpVFNuc0wzMEFuQmlVMGdtUDpIPFkmYnJCNGJSZUVAImpJdChFPiNIbzZyfj5lbmRzdHJlYW0KZW5kb2JqCjkgMCBvYmoKPDwKL0ZpbHRlciBbIC9BU0NJSTg1RGVjb2RlIC9GbGF0ZURlY29kZSBdIC9MZW5ndGggMTQyCj4+CnN0cmVhbQpHYXBBMFltUz8lJ0w6J1o/WkFSTldkMTtkXWdYOlJMXENsb1tMdDw/ViVMSUwnVUxtJVkyRjk/WTsqcWYqNnMuXEZATmlpTEwpclMxWyNuZV1yKyhVMXBcKGUzUTdBZUU0LFBiVG9gMlhYXFMxRGBGUUFeREROaztcPkt1Lz5QKkw3Xi1BJXMjSkQ2LH4+ZW5kc3RyZWFtCmVuZG9iagp4cmVmCjAgMTAKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDYxIDAwMDAwIG4gCjAwMDAwMDAwOTIgMDAwMDAgbiAKMDAwMDAwMDE5OSAwMDAwMCBuIAowMDAwMDAwNDAyIDAwMDAwIG4gCjAwMDAwMDA2MDUgMDAwMDAgbiAKMDAwMDAwMDY3MyAwMDAwMCBuIAowMDAwMDAwOTM0IDAwMDAwIG4gCjAwMDAwMDA5OTkgMDAwMDAgbiAKMDAwMDAwMTIzMSAwMDAwMCBuIAp0cmFpbGVyCjw8Ci9JRCAKWzw5M2RlNjIwMzliYTJmYTFmYmY3YmMwOTY3ZWFhYjMzYz48OTNkZTYyMDM5YmEyZmExZmJmN2JjMDk2N2VhYWIzM2M+XQolIFJlcG9ydExhYiBnZW5lcmF0ZWQgUERGIGRvY3VtZW50IC0tIGRpZ2VzdCAob3BlbnNvdXJjZSkKCi9JbmZvIDYgMCBSCi9Sb290IDUgMCBSCi9TaXplIDEwCj4+CnN0YXJ0eHJlZgoxNDYzCiUlRU9GCg=="
+    },
+    {
+      "key": "noPdfBase64",
+      "value": "ZXN0byBubyBlcyB1biBQREY="
+    },
+    {
+      "key": "pdfCorruptoBase64",
+      "value": "JVBERi0xLjQKYmFzdXJhIHNpbiBlc3RydWN0dXJh"
+    }
+  ]
+}

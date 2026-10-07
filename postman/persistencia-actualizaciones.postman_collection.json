@@ -1,0 +1,469 @@
+{
+  "info": {
+    "name": "persistencia-actualizaciones",
+    "description": "POST, PATCH y DELETE de /pdf. Correr en orden: el POST guarda el id que usan los siguientes. Cada corrida genera un checksum nuevo.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "GET /health",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set('correlationId', pm.variables.replaceIn('{{$guid}}'));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 200', () => pm.response.to.have.status(200));",
+              "pm.test('status ok', () => pm.expect(pm.response.json().status).to.eql('ok'));",
+              "pm.test('devuelve el X-Correlation-ID enviado', () => {",
+              "  pm.expect(pm.response.headers.get('X-Correlation-ID')).to.eql(pm.variables.get('correlationId'));",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "X-Correlation-ID",
+            "value": "{{correlationId}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseURL}}/health",
+          "host": [
+            "{{baseURL}}"
+          ],
+          "path": [
+            "health"
+          ]
+        },
+        "description": ""
+      }
+    },
+    {
+      "name": "POST /pdf - crear",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set('correlationId', pm.variables.replaceIn('{{$guid}}'));",
+              "pm.collectionVariables.unset('checksum');",
+              "if (!pm.collectionVariables.get('checksum')) {",
+              "  const hex = Array.from({length: 64}, () => '0123456789abcdef'[Math.floor(Math.random() * 16)]).join('');",
+              "  pm.collectionVariables.set('checksum', hex);",
+              "}"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 201', () => pm.response.to.have.status(201));",
+              "pm.test('documento del modelo común', () => {",
+              "  const d = pm.response.json();",
+              "  pm.expect(d).to.include.all.keys('id', 'nombre', 'checksum', 'texto', 'tamano_bytes', 'paginas', 'created_at', 'updated_at');",
+              "  pm.expect(d.created_at).to.match(/^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$/);",
+              "});",
+              "pm.collectionVariables.set('documentoId', pm.response.json().id);",
+              "pm.test('devuelve el X-Correlation-ID enviado', () => {",
+              "  pm.expect(pm.response.headers.get('X-Correlation-ID')).to.eql(pm.variables.get('correlationId'));",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-Correlation-ID",
+            "value": "{{correlationId}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseURL}}/pdf",
+          "host": [
+            "{{baseURL}}"
+          ],
+          "path": [
+            "pdf"
+          ]
+        },
+        "description": "",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"nombre\": \"contrato.pdf\",\n  \"checksum\": \"{{checksum}}\",\n  \"texto\": \"Contenido extraído del PDF\",\n  \"tamano_bytes\": 245760,\n  \"paginas\": 3\n}"
+        }
+      }
+    },
+    {
+      "name": "POST /pdf - checksum duplicado → 409 DUPLICATE_CHECKSUM",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set('correlationId', pm.variables.replaceIn('{{$guid}}'));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 409', () => pm.response.to.have.status(409));",
+              "pm.test('error con el formato común', () => {",
+              "  const e = pm.response.json().error;",
+              "  pm.expect(e.code).to.eql('DUPLICATE_CHECKSUM');",
+              "  pm.expect(e).to.have.all.keys('code', 'message', 'details', 'correlation_id');",
+              "  pm.expect(e.correlation_id).to.eql(pm.variables.get('correlationId'));",
+              "});",
+              "pm.test('devuelve el X-Correlation-ID enviado', () => {",
+              "  pm.expect(pm.response.headers.get('X-Correlation-ID')).to.eql(pm.variables.get('correlationId'));",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-Correlation-ID",
+            "value": "{{correlationId}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseURL}}/pdf",
+          "host": [
+            "{{baseURL}}"
+          ],
+          "path": [
+            "pdf"
+          ]
+        },
+        "description": "",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"nombre\": \"otro.pdf\",\n  \"checksum\": \"{{checksum}}\",\n  \"texto\": \"x\",\n  \"tamano_bytes\": 1,\n  \"paginas\": 1\n}"
+        }
+      }
+    },
+    {
+      "name": "POST /pdf - campo extra → 400 VALIDATION_ERROR",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set('correlationId', pm.variables.replaceIn('{{$guid}}'));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 400', () => pm.response.to.have.status(400));",
+              "pm.test('error con el formato común', () => {",
+              "  const e = pm.response.json().error;",
+              "  pm.expect(e.code).to.eql('VALIDATION_ERROR');",
+              "  pm.expect(e).to.have.all.keys('code', 'message', 'details', 'correlation_id');",
+              "  pm.expect(e.correlation_id).to.eql(pm.variables.get('correlationId'));",
+              "});",
+              "pm.test('devuelve el X-Correlation-ID enviado', () => {",
+              "  pm.expect(pm.response.headers.get('X-Correlation-ID')).to.eql(pm.variables.get('correlationId'));",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "X-Correlation-ID",
+            "value": "{{correlationId}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseURL}}/pdf",
+          "host": [
+            "{{baseURL}}"
+          ],
+          "path": [
+            "pdf"
+          ]
+        },
+        "description": "",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"nombre\": \"x.pdf\",\n  \"checksum\": \"abc\",\n  \"texto\": \"x\",\n  \"tamano_bytes\": 1,\n  \"inventado\": true\n}"
+        }
+      }
+    },
+    {
+      "name": "PATCH /pdf/{id} - renombrar",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set('correlationId', pm.variables.replaceIn('{{$guid}}'));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 200', () => pm.response.to.have.status(200));",
+              "pm.test('documento del modelo común', () => {",
+              "  const d = pm.response.json();",
+              "  pm.expect(d).to.include.all.keys('id', 'nombre', 'checksum', 'texto', 'tamano_bytes', 'paginas', 'created_at', 'updated_at');",
+              "  pm.expect(d.created_at).to.match(/^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$/);",
+              "});",
+              "pm.test('nombre nuevo', () => pm.expect(pm.response.json().nombre).to.eql('contrato-renombrado.pdf'));",
+              "pm.test('devuelve el X-Correlation-ID enviado', () => {",
+              "  pm.expect(pm.response.headers.get('X-Correlation-ID')).to.eql(pm.variables.get('correlationId'));",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "X-Correlation-ID",
+            "value": "{{correlationId}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseURL}}/pdf/{{documentoId}}",
+          "host": [
+            "{{baseURL}}"
+          ],
+          "path": [
+            "pdf",
+            "{{documentoId}}"
+          ]
+        },
+        "description": "",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"nombre\": \"contrato-renombrado.pdf\"\n}"
+        }
+      }
+    },
+    {
+      "name": "DELETE /pdf/{id} → 204",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set('correlationId', pm.variables.replaceIn('{{$guid}}'));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 204', () => pm.response.to.have.status(204));",
+              "pm.test('devuelve el X-Correlation-ID enviado', () => {",
+              "  pm.expect(pm.response.headers.get('X-Correlation-ID')).to.eql(pm.variables.get('correlationId'));",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "DELETE",
+        "header": [
+          {
+            "key": "X-Correlation-ID",
+            "value": "{{correlationId}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseURL}}/pdf/{{documentoId}}",
+          "host": [
+            "{{baseURL}}"
+          ],
+          "path": [
+            "pdf",
+            "{{documentoId}}"
+          ]
+        },
+        "description": ""
+      }
+    },
+    {
+      "name": "DELETE /pdf/{id} otra vez → 404 RESOURCE_NOT_FOUND",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set('correlationId', pm.variables.replaceIn('{{$guid}}'));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 404', () => pm.response.to.have.status(404));",
+              "pm.test('error con el formato común', () => {",
+              "  const e = pm.response.json().error;",
+              "  pm.expect(e.code).to.eql('RESOURCE_NOT_FOUND');",
+              "  pm.expect(e).to.have.all.keys('code', 'message', 'details', 'correlation_id');",
+              "  pm.expect(e.correlation_id).to.eql(pm.variables.get('correlationId'));",
+              "});",
+              "pm.test('devuelve el X-Correlation-ID enviado', () => {",
+              "  pm.expect(pm.response.headers.get('X-Correlation-ID')).to.eql(pm.variables.get('correlationId'));",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "DELETE",
+        "header": [
+          {
+            "key": "X-Correlation-ID",
+            "value": "{{correlationId}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseURL}}/pdf/{{documentoId}}",
+          "host": [
+            "{{baseURL}}"
+          ],
+          "path": [
+            "pdf",
+            "{{documentoId}}"
+          ]
+        },
+        "description": ""
+      }
+    },
+    {
+      "name": "PATCH /pdf/{id} inexistente → 404 RESOURCE_NOT_FOUND",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.variables.set('correlationId', pm.variables.replaceIn('{{$guid}}'));"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('status 404', () => pm.response.to.have.status(404));",
+              "pm.test('error con el formato común', () => {",
+              "  const e = pm.response.json().error;",
+              "  pm.expect(e.code).to.eql('RESOURCE_NOT_FOUND');",
+              "  pm.expect(e).to.have.all.keys('code', 'message', 'details', 'correlation_id');",
+              "  pm.expect(e.correlation_id).to.eql(pm.variables.get('correlationId'));",
+              "});",
+              "pm.test('devuelve el X-Correlation-ID enviado', () => {",
+              "  pm.expect(pm.response.headers.get('X-Correlation-ID')).to.eql(pm.variables.get('correlationId'));",
+              "});"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "X-Correlation-ID",
+            "value": "{{correlationId}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseURL}}/pdf/{{documentoId}}",
+          "host": [
+            "{{baseURL}}"
+          ],
+          "path": [
+            "pdf",
+            "{{documentoId}}"
+          ]
+        },
+        "description": "",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"nombre\": \"x.pdf\"\n}"
+        }
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseURL",
+      "value": "http://localhost:8000"
+    },
+    {
+      "key": "checksum",
+      "value": ""
+    },
+    {
+      "key": "documentoId",
+      "value": ""
+    }
+  ]
+}
