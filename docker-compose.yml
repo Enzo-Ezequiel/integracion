@@ -7,9 +7,14 @@ services:
     image: orquestador:${ORQUESTADOR_VERSION:?definir en .env}
     env_file: ./env/orquestador.env
     networks: [redutn]
-    # Único servicio público. Hasta sumar Traefik se publica en el host; el resto queda interno.
-    ports:
-      - "${ORQUESTADOR_HOST_PORT:?definir en .env}:8000"
+    # Único servicio público, a través del Traefik del equipo (dockers/traefik). El resto
+    # no lleva labels: con exposedByDefault=false queda solo en la red interna.
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.orquestador.rule=Host(`${ORQUESTADOR_HOST:?definir en .env}`)"
+      - "traefik.http.routers.orquestador.entrypoints=https"
+      - "traefik.http.routers.orquestador.tls=true"
+      - "traefik.http.services.orquestador.loadbalancer.server.port=8000"
     depends_on:
       validacion-pdf:
         condition: service_healthy
