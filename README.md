@@ -35,9 +35,13 @@ y Redis no publican 27017 ni 6379 porque Traefik usa esos puertos como entrypoin
   ```
 
   Publica 80 (redirige a HTTPS), 443, 6379 y 27017, con certificados mkcert para
-  `*.universidad.localhost` en `certs/`. Si la CA de mkcert de quien generó los certificados
-  no está instalada en la máquina, el navegador avisa y `curl` necesita `-k`. Para que no
-  avise: `mkcert -install` y regenerar los certificados (ver `dockers/traefik/README.md`).
+  `*.universidad.localhost` en `certs/`. Los certificados son de cada máquina: en una máquina
+  nueva, `mkcert -install` y regenerarlos (ver `dockers/traefik/README.md`). Con la CA
+  instalada, el navegador y k6 validan el certificado sin avisos.
+
+  El `curl` de Windows (Schannel) exige comprobar la revocación y los certificados de mkcert
+  no la publican (`CRYPT_E_NO_REVOCATION_CHECK`): usar `curl --ssl-no-revoke`, que sigue
+  validando la cadena y el nombre. No hace falta `-k`.
 
 ## Levantar todo
 
@@ -117,7 +121,7 @@ done
 
 # Alta de un PDF por el orquestador, con un correlation_id fijo
 printf '{"archivo_base64":"%s","nombre":"documento-a-01.pdf"}' "$(base64 -w0 pdfs/documento-a-01.pdf)" > body.json
-curl -k -X POST https://pdf.universidad.localhost/pdf -H "Content-Type: application/json" \
+curl --ssl-no-revoke -X POST https://pdf.universidad.localhost/pdf -H "Content-Type: application/json" \
      -H "X-Correlation-ID: aaaaaaaa-0000-4000-8000-000000000001" --data-binary @body.json
 
 # Recorrido de esa request por todos los servicios
@@ -148,8 +152,8 @@ Docker Desktop 29.6.2 en Windows 11, con la notebook enchufada.
 
 ## Prueba de carga (k6)
 
-`carga/k6-orquestador.js` entra por Traefik (HTTPS, sin verificar el certificado de
-desarrollo) y reproduce el escenario del profesor: 10 PDFs de 10 páginas que se
+`carga/k6-orquestador.js` entra por Traefik (HTTPS, validando el certificado; con
+`-e INSECURE=1` no lo valida) y reproduce el escenario del profesor: 10 PDFs de 10 páginas que se
 repiten durante 30 s contra `POST /pdf` del orquestador. Se arranca con la base vacía
 (`docker compose down -v`): la primera vuelta da 201 y las siguientes 409
 `DUPLICATE_CHECKSUM`. Las dos cuentan como correctas, porque el 409 también pasa por
@@ -220,8 +224,6 @@ Lectura:
   un snapshot al apagarse. Si mientras estuvo caído hubo una escritura, al volver devuelve el
   listado viejo hasta que vence `REDIS_TTL_SECONDS` (se comprobó: 217 s con el nombre
   anterior). Mitigaciones posibles: Redis sin persistencia (es solo caché) o un TTL más corto.
-- **Certificados de Traefik de otra máquina.** `dockers/traefik/certs` se generó con la CA
-  de mkcert de otra PC: en la notebook hay que usar `-k` o regenerarlos.
 - **Traefik no balancea extracción.** Solo el orquestador pasa por Traefik; el reparto entre
   las 3 réplicas de extracción lo hace el DNS de Docker por conexión (ver carga).
 - **Vegeta pendiente:** no está instalado en la notebook. La carga se midió solo con k6.
