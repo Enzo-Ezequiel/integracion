@@ -1,10 +1,13 @@
 # integracion — microservicios-pdf
 
-Levanta juntos los cinco microservicios del contrato `microservicios-pdf` v1.1.0 con
+Levanta juntos los cinco microservicios del contrato `microservicios-pdf` v1.2.0 con
 MongoDB y Redis reales, y documenta las pruebas de integración.
 
-El contrato completo, con las aclaraciones de la 1.1.0 (compatibles con la 1.0.0) y su registro
-de cambios, está en [CONTRATO.md](CONTRATO.md).
+El contrato completo, con su registro de cambios, está en [CONTRATO.md](CONTRATO.md). La 1.2.0
+(compatible) incorpora lo que pidió el profesor el 2026-10-07: `/health` con dependencias, logs
+(12-Factor XI), finalización segura (12-Factor IX) y balanceo de extracción por Traefik. Qué
+está implementado y qué falta se ve en [Decisiones y respuestas del
+profesor](#decisiones-y-respuestas-del-profesor-2026-10-07).
 
 | Servicio | Repo | Imagen | Público |
 |---|---|---|---|
@@ -388,13 +391,84 @@ Snyk queda para el final, con la cuenta de la facultad (es web).
   con TDD en la rama `fix/fechas-milisegundos` de Orquestador: dos commits rojos y el
   arreglo. De ahí sale la imagen `orquestador:1.0.1`.
 
+## Decisiones y respuestas del profesor (2026-10-07)
+
+Preguntas que llevamos a la clase, la respuesta y qué cambió en el proyecto.
+
+| Pregunta | Respuesta del profesor | En el proyecto |
+|---|---|---|
+| ¿Qué escenario usa para la prueba de carga? ¿El `409` de un PDF repetido cuenta como válido? | vegeta con **10 000 peticiones**; el PDF repetido **es válido**. | El `409` ya se contaba como correcto (pasa por validación y extracción completas). Falta correr el escenario de 10 000 peticiones (ver [vegeta](#prueba-de-carga-vegeta)). |
+| Docker reparte extracción por conexión y con pocos clientes una réplica queda ociosa. ¿Ruteamos extracción por Traefik aunque no sea pública? | Traefik tiene que balancearlo automáticamente; probar **con y sin cortocircuito**. | Contrato 1.2.0: Traefik interno (`traefik-interno`) sin puertos publicados. Pendiente de implementar y medir. |
+| Con Redis caído el cliente no tenía timeout de conexión. ¿Timeout por variable o fijo en el código? | Sí hay que ponerle timeout, y el **`/health` tiene que verificar si Redis funciona**. | Timeout corto ya está en los dos servicios de persistencia. Contrato 1.2.0: `/health` informa MongoDB y Redis. Pendiente de implementar. |
+| Si Redis se cae y vuelve, ¿hay que recuperar los datos viejos? | No: si Redis se cae no hay por qué conservar los datos. La caché igual se termina borrando. | Ya resuelto: Redis corre sin persistencia y arranca vacío. |
+
+### Por qué no se guarda el PDF
+
+El sistema guarda solo el texto extraído y los metadatos; el binario no se persiste (contrato,
+modelo común). Además del tema legal, con el tiempo se acumulan muchos PDF y el volumen crece
+mucho. Si hiciera falta guardarlos, lo correcto no es una carpeta del contenedor ni MongoDB sino
+un **object storage**: guarda objetos (binarios, JSON, lo que sea) identificados por clave y con
+**etiquetas** en lugar de carpetas, y es más eficiente para compartir archivos que una base de
+datos (es lo que se usa en la nube). Queda fuera del alcance.
+
+### Por qué MongoDB no va dentro del microservicio
+
+MongoDB corre en su propio contenedor, con volumen nombrado, y los servicios se conectan por
+`MONGO_URI` (12-Factor IV y VI). Si la base fuera parte del microservicio, al escalar a 3 réplicas
+habría 3 bases distintas, cada una con datos diferentes. Por eso los procesos son sin estado y el
+estado vive en un servicio de apoyo compartido.
+
+### Patrones de microservicios que usa el proyecto
+
+| Patrón | Dónde |
+|---|---|
+| **SAGA orquestada** | Una "transacción" que cruza servicios no puede usar una transacción de base de datos. El orquestador ejecuta los pasos (validar → extraer → guardar) y, si el alta queda incierta, ejecuta una **compensación** (borrar lo que se creó). Es idempotente y queda en los logs. |
+| **API Gateway / proxy inverso** | Traefik: única entrada pública, TLS, ruteo por `Host`. |
+| **Balanceo de carga y cortocircuito** | Traefik reparte entre réplicas y aplica el *circuit breaker*; el código solo reintenta (`RETRY_ATTEMPTS`). |
+| **Descubrimiento de servicios** | Traefik lee los contenedores y sus labels desde Docker; dentro de `redutn` los servicios se encuentran por nombre (DNS de Docker). |
+| **Cache-aside** | `persistencia-consultas`: busca en Redis, si no está consulta MongoDB y lo guarda. |
+| **CQRS (separación lectura/escritura)** | Un servicio solo escribe (`persistencia-actualizaciones`) y otro solo lee (`persistencia-consultas`). |
+| **Health check** | `GET /health` en todos; Docker y `depends_on: service_healthy` lo usan. |
+| **Correlation ID (traza)** | `X-Correlation-ID` viaja por todos los servicios y aparece en cada línea de log. |
+| **Repository y puertos/adaptadores** | En cada servicio: el negocio depende de abstracciones; MongoDB, Redis y los clientes HTTP son adaptadores. |
+
+### Observabilidad: logs, trazas y métricas
+
+- **Logs (obligatorio, 12-Factor XI):** a `stdout`, niveles `DEBUG`/`INFO`/`WARNING`/`ERROR`,
+  configuración en un `logging.json` por repo y sin datos sensibles. Qué va en cada nivel está
+  en el [contrato](CONTRATO.md#logs). Pendiente de implementar en los cinco repos.
+- **Trazas:** con réplicas no se sabe qué instancia atendió cada paso; el `correlation_id` es el
+  identificador único de cada petición y permite seguirla por todos los servicios:
+  `docker compose logs | grep <correlation_id>`. Ya implementado.
+- **Métricas** (uso de CPU y memoria) y el stack de búsqueda y paneles (Elasticsearch, un
+  recolector y Grafana): el profesor los mostró pero **no son obligatorios**; no se implementan.
+  Para la carga alcanza `docker stats` durante la prueba.
+
+### Finalización segura (12-Factor IX)
+
+Al detener un contenedor Docker manda `SIGTERM` y, si no termina a tiempo, `SIGKILL`. Si el
+proceso muere con requests en curso, el cliente se queda sin respuesta y puede quedar una
+escritura a medias. El contrato 1.2.0 fija qué hace cada servicio: dejar de aceptar conexiones,
+terminar lo que está en curso, cerrar las conexiones y salir con código 0, todo registrado en
+los logs. Pendiente de implementar y probar (`docker compose stop` bajo carga, después
+`docker inspect --format '{{.State.ExitCode}}'`).
+
+### Swagger
+
+Cada servicio expone la documentación interactiva de FastAPI en `/docs` (Swagger UI) y el
+esquema en `/openapi.json`. El del orquestador se abre desde el host en
+`https://pdf.universidad.localhost/docs`; los internos solo se alcanzan dentro de `redutn`.
+
+### `depends_on`
+
+El profesor advirtió que `depends_on` solo no alcanza: el contenedor puede estar arrancado y el
+puerto todavía cerrado. Acá se usa `depends_on` con `condition: service_healthy`, que espera a
+que el `/health` del servicio responda.
+
 ## Deuda técnica
 
-- **Consultas tarda 4 s por request con Redis caído** (7,7 s el listado). Responde bien,
-  pero cada request espera al cliente Redis al leer y al escribir la caché: el cliente se crea
-  sin `socket_connect_timeout` (`persistencia-consultas/app/core/database.py`). Actualizaciones
-  sí lo configura y tarda 2 s. Arreglarlo con una variable nueva implica versionar el
-  contrato, así que se lleva al grupo.
+- **Consultas tardaba 4 s por request con Redis caído:** **resuelto** (2026-10-07, PR #18
+  de consultas): timeout corto del cliente Redis, 1,0 s por request.
 - **Datos viejos en caché al volver Redis** (A9): **resuelto** (2026-10-07). Redis guardaba
   un snapshot al apagarse y, si mientras estuvo caído hubo una escritura, al volver devolvía el
   listado viejo hasta que vencía `REDIS_TTL_SECONDS` (se comprobó: 217 s). Ahora Redis corre
@@ -402,18 +476,20 @@ Snyk queda para el final, con la cuenta de la facultad (es web).
   estado que deba sobrevivir a un reinicio (12-Factor VI), así que arranca vacío. Queda la
   ventana mientras Redis está caído *y no se reinicia* (por ejemplo, una partición de red),
   acotada por el TTL.
-- **Traefik no balancea extracción.** Solo el orquestador pasa por Traefik; el reparto entre
-  las 3 réplicas de extracción lo hace el DNS de Docker por conexión, y con pocos clientes
-  puede quedar una réplica ociosa (ver "Reparto entre réplicas" en la carga).
-- **Vulnerabilidades de las imágenes** (ver Grype): base Debian 12 en extracción y
-  dependencias de Python con arreglo disponible en validación y consultas. Lo arregla cada
-  dueño en su repo.
+- **Traefik todavía no balancea extracción.** El reparto entre las 3 réplicas lo hace el DNS
+  de Docker por conexión, y con pocos clientes puede quedar una réplica ociosa (ver "Reparto
+  entre réplicas" en la carga). Decidido en el contrato 1.2.0 (Traefik interno); falta
+  implementarlo y medir con y sin cortocircuito.
+- **Contrato 1.2.0 sin implementar todavía:** `/health` con dependencias, logs con
+  `logging.json` y `LOG_LEVEL`, y finalización segura probada.
+- **Vulnerabilidades de las imágenes:** **resuelto** lo que tenía arreglo (ver Grype). Quedan
+  las High de Debian 13 sin arreglo publicado.
 - **Extracción sigue trabajando después de un timeout.** El orquestador corta y reintenta,
   pero el servidor no cancela la extracción en curso: bajo carga, un timeout multiplica por
   `RETRY_ATTEMPTS + 1` el trabajo de extracción. Conviene un `REQUEST_TIMEOUT_SECONDS` con
   margen sobre el p95 medido.
-- **Consultas no registra si fue HIT o MISS**; solo se ve en `duracion_ms`.
-- **`X-Extraction-Time-Ms` no está en el contrato.** Extracción lo devuelve y el orquestador
-  lo reenvía (como el monolito) para medir la extracción aparte del total; si el grupo lo
-  quiere oficial, se agrega en una versión nueva del contrato. Falta repetir la prueba de
-  carga con `orquestador:1.0.2` para tener la columna de extracción medida así.
+- **Consultas no registra si fue HIT o MISS**; solo se ve en `duracion_ms`. El contrato 1.2.0
+  lo pide en `INFO`.
+- **Falta repetir la carga con `orquestador:1.0.2`**, que reenvía `X-Extraction-Time-Ms`
+  (contrato 1.1.0), para tener la columna de extracción medida con el header.
+- **Sin métricas ni paneles** (Grafana, Elasticsearch): opcionales según el profesor.
