@@ -395,10 +395,13 @@ Snyk queda para el final, con la cuenta de la facultad (es web).
   sin `socket_connect_timeout` (`persistencia-consultas/app/core/database.py`). Actualizaciones
   sí lo configura y tarda 2 s. Arreglarlo con una variable nueva implica versionar el
   contrato, así que se lleva al grupo.
-- **Datos viejos en caché al volver Redis** (A9, declarado por actualizaciones). Redis guarda
-  un snapshot al apagarse. Si mientras estuvo caído hubo una escritura, al volver devuelve el
-  listado viejo hasta que vence `REDIS_TTL_SECONDS` (se comprobó: 217 s con el nombre
-  anterior). Mitigaciones posibles: Redis sin persistencia (es solo caché) o un TTL más corto.
+- **Datos viejos en caché al volver Redis** (A9): **resuelto** (2026-10-07). Redis guardaba
+  un snapshot al apagarse y, si mientras estuvo caído hubo una escritura, al volver devolvía el
+  listado viejo hasta que vencía `REDIS_TTL_SECONDS` (se comprobó: 217 s). Ahora Redis corre
+  sin persistencia (`--save ""`, `--appendonly no`) y sin volumen: es solo caché, no tiene
+  estado que deba sobrevivir a un reinicio (12-Factor VI), así que arranca vacío. Queda la
+  ventana mientras Redis está caído *y no se reinicia* (por ejemplo, una partición de red),
+  acotada por el TTL.
 - **Traefik no balancea extracción.** Solo el orquestador pasa por Traefik; el reparto entre
   las 3 réplicas de extracción lo hace el DNS de Docker por conexión, y con pocos clientes
   puede quedar una réplica ociosa (ver "Reparto entre réplicas" en la carga).

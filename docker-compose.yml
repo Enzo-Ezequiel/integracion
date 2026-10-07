@@ -80,8 +80,9 @@ services:
 
   redis:
     image: redis:7
-    volumes:
-      - redis_data:/data
+    # Solo caché: sin snapshot ni AOF. Si Redis se reinicia arranca vacío, en vez de
+    # recuperar un snapshot con datos que persistencia-actualizaciones ya invalidó.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
     networks: [redutn]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -95,4 +96,3 @@ networks:
 
 volumes:
   mongo_data:
-  redis_data:
