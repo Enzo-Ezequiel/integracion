@@ -1,0 +1,9 @@
+# Configuración dinámica de traefik-interno (lo que no se puede declarar con labels).
+http:
+  serversTransports:
+    # Una réplica recién detenida sigue en la lista de Traefik hasta que llega el evento
+    # de Docker; sin esto, conectar a su IP espera el timeout del orquestador (10 s).
+    # Con 1 s el orquestador reintenta enseguida contra otra réplica.
+    extraccion:
+      forwardingTimeouts:
+        dialTimeout: 1s

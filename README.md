@@ -1,18 +1,22 @@
 # integracion — microservicios-pdf
 
-Levanta juntos los cinco microservicios del contrato `microservicios-pdf` v1.1.0 con
+Levanta juntos los cinco microservicios del contrato `microservicios-pdf` v1.2.0 con
 MongoDB y Redis reales, y documenta las pruebas de integración.
 
-El contrato completo, con las aclaraciones de la 1.1.0 (compatibles con la 1.0.0) y su registro
-de cambios, está en [CONTRATO.md](CONTRATO.md).
+El contrato completo, con su registro de cambios, está en [CONTRATO.md](CONTRATO.md). La 1.2.0
+(compatible) incorpora lo que pidió el profesor el 2026-10-07: `/health` con dependencias, logs
+(12-Factor XI), finalización segura (12-Factor IX) y balanceo de extracción por Traefik. Qué
+está implementado y qué falta se ve en [Decisiones y respuestas del
+profesor](#decisiones-y-respuestas-del-profesor-2026-10-07).
 
 | Servicio | Repo | Imagen | Público |
 |---|---|---|---|
-| orquestador | [vale36/Orquestador](https://github.com/vale36/Orquestador) | `orquestador:1.0.2` | sí, por Traefik: `https://pdf.universidad.localhost` |
-| validacion-pdf | [valentinapenasco/validacion-pdf](https://github.com/valentinapenasco/validacion-pdf) | `validacion-pdf:1.0.1` | no |
-| extraccion-texto | [NicolasPerez735/Extraccion-de-texto-pdf-](https://github.com/NicolasPerez735/Extraccion-de-texto-pdf-) | `extraccion-texto:1.0.2` | no |
-| persistencia-actualizaciones | [matiasscanoo/persistencia-actualizaciones](https://github.com/matiasscanoo/persistencia-actualizaciones) | `persistencia-actualizaciones:1.0.1` | no |
-| persistencia-consultas | [ManuelGomez33/persistencia-consultas](https://github.com/ManuelGomez33/persistencia-consultas) | `persistencia-consultas:1.0.1` | no |
+| orquestador | [vale36/Orquestador](https://github.com/vale36/Orquestador) | `orquestador:1.0.3` | sí, por Traefik: `https://pdf.universidad.localhost` |
+| validacion-pdf | [valentinapenasco/validacion-pdf](https://github.com/valentinapenasco/validacion-pdf) | `validacion-pdf:1.0.2` | no |
+| extraccion-texto | [NicolasPerez735/Extraccion-de-texto-pdf-](https://github.com/NicolasPerez735/Extraccion-de-texto-pdf-) | `extraccion-texto:1.0.3` (3 réplicas) | no; la balancea `traefik-interno` |
+| traefik-interno | — | `traefik:v3.6` | no (sin puertos publicados) |
+| persistencia-actualizaciones | [matiasscanoo/persistencia-actualizaciones](https://github.com/matiasscanoo/persistencia-actualizaciones) | `persistencia-actualizaciones:1.0.2` | no |
+| persistencia-consultas | [ManuelGomez33/persistencia-consultas](https://github.com/ManuelGomez33/persistencia-consultas) | `persistencia-consultas:1.0.2` | no |
 | mongodb | — | `mongo:7.0` (volumen `mongo_data`) | no |
 | redis | — | `redis:7` (volumen `redis_data`) | no |
 
@@ -91,16 +95,17 @@ Los pasos, a mano:
 1. Construir las imágenes con su tag de versión, desde la carpeta grande del proyecto:
 
    ```bash
-   docker build -t validacion-pdf:1.0.1 validacion-pdf
-   docker build -t extraccion-texto:1.0.2 Extraccion-de-texto-pdf-
-   docker build -t persistencia-actualizaciones:1.0.1 persistencia-actualizaciones
-   docker build -t persistencia-consultas:1.0.1 persistencia-consultas
-   docker build -t orquestador:1.0.2 Orquestador
+   docker build -t validacion-pdf:1.0.2 validacion-pdf
+   docker build -t extraccion-texto:1.0.3 Extraccion-de-texto-pdf-
+   docker build -t persistencia-actualizaciones:1.0.2 persistencia-actualizaciones
+   docker build -t persistencia-consultas:1.0.2 persistencia-consultas
+   docker build -t orquestador:1.0.3 Orquestador
    ```
 
-   Estas versiones salen de las ramas `fix/...` de cada repo (ver
-   [Hallazgos](#hallazgos-de-la-integración)). Hasta que se mergeen, construir desde esas
-   ramas; `scripts/levantar.sh` muestra en qué rama está cada repo.
+   Estas versiones implementan el contrato 1.2.0 y salen de las ramas
+   `feat/logs-y-apagado-seguro` (extracción, validación, orquestador) y `feat/contrato-1.2.0`
+   (las dos persistencias). Hasta que se mergeen, construir desde esas ramas;
+   `scripts/levantar.sh` muestra en qué rama está cada repo.
 
 2. Crear la configuración a partir de los ejemplos (no hay secretos; son nombres de la red
    interna):
@@ -280,7 +285,8 @@ Lectura:
 - **Contra el profesor (440 ms):** con 3 réplicas el promedio queda en 120 ms con 5 VUs y en
   243 ms con 10 VUs (p95 417 ms). Su máquina, sus PDFs y su concurrencia no son los mismos:
   hay que repetirlo con su escenario cuando lo tengamos.
-- **Reparto entre réplicas y resultados bimodales.** El orquestador (httpx) reutiliza
+- **Reparto entre réplicas y resultados bimodales** *(resuelto con `traefik-interno`, ver
+  [Balanceo de extracción](#balanceo-de-extracción-con-traefik-interno-contrato-120))*. El orquestador (httpx) reutiliza
   conexiones keep-alive y el DNS de Docker elige réplica *por conexión*, no por request. Cada
   VU termina usando una conexión fija: con 1 VU todo va a una réplica (272 de 272), y con 5
   VUs hay un 39 % de probabilidad (3·(2/3)⁵) de que alguna réplica no reciba ninguna
@@ -298,6 +304,66 @@ Lectura:
   p95 350–425 ms, 40–42 PDF/s. La máquina rindió algo menos que a la mañana (1.0.0 dio entre
   24 y 40 PDF/s en las mismas condiciones), así que las comparaciones finas hay que hacerlas
   en la misma sesión.
+
+## Balanceo de extracción con `traefik-interno` (contrato 1.2.0)
+
+El orquestador llama a extracción a través de `traefik-interno`
+(`EXTRACCION_URL=http://traefik-interno`), un Traefik propio de este compose que reparte **por
+request** entre las réplicas. No publica puertos y solo descubre los contenedores con la label
+`microservicios-pdf.balanceo=interno`; extracción no lleva `traefik.enable=true`, así que el
+Traefik de la cátedra no la publica (su API solo lista el router `orquestador@docker`). No se
+usa el de la cátedra porque redirige todo el HTTP a HTTPS (se probó: `301`), y adentro de
+`redutn` las llamadas son HTTP plano.
+
+```bash
+docker compose up -d                                                             # sin cortocircuito
+docker compose -f docker-compose.yml -f docker-compose.cortocircuito.yml up -d   # con cortocircuito
+```
+
+Cortocircuito: middleware `circuitBreaker` de Traefik con
+`NetworkErrorRatio() > 0.30 || ResponseCodeRatio(500, 600, 0, 600) > 0.30`. No se programa:
+el código solo reintenta (`RETRY_ATTEMPTS`).
+
+Resultados del 2026-10-07 (k6, 20 s por corrida, 3 réplicas, misma sesión; 100 % de checks):
+
+| Orquestador → extracción | VUs | Promedio | p95 | PDF/s | Reparto entre réplicas |
+|---|---|---|---|---|---|
+| Directo (DNS de Docker) | 1 | 166 ms | 307 ms | 6,0 | 120 / 0 / 0 |
+| Directo | 5 | 297 ms | 593 ms | 16,7 | 187 / 150 / **0** |
+| Directo | 10 | 236 ms | 341 ms | 42,1 | 283 / 282 / 283 |
+| `traefik-interno` | 1 | 127 ms | 221 ms | 7,8 | 52 / 53 / 52 |
+| `traefik-interno` | 5 | **133 ms** | **189 ms** | **37,4** | 250 / 250 / 250 |
+| `traefik-interno` | 10 | 240 ms | 339 ms | 41,2 | 278 / 277 / 277 |
+| `traefik-interno` + cortocircuito | 1 | 120 ms | 221 ms | 8,3 | 55 / 56 / 55 |
+| `traefik-interno` + cortocircuito | 5 | 135 ms | 195 ms | 36,8 | 248 / 246 / 248 |
+| `traefik-interno` + cortocircuito | 10 | 244 ms | 344 ms | 40,6 | 274 / 274 / 273 |
+
+- **El reparto queda parejo con cualquier cantidad de clientes.** Directo, con 5 VUs una réplica
+  quedó sin trabajo y se procesó menos de la mitad. Con 10 VUs las dos variantes empatan: la
+  capacidad es la misma (3 procesos); Traefik evita que dependa de la suerte de las conexiones.
+- **El salto extra por Traefik no se nota** (127 ms contra 166 ms con 1 VU, porque directo una
+  sola réplica atendía todo). El cortocircuito no cambia los tiempos cuando todo anda bien.
+
+Fallas con 5 VUs, réplica 3 detenida a los 6 s (20 s de carga):
+
+| Falla | Cortocircuito | Checks | Máximo | Reintentos del orquestador |
+|---|---|---|---|---|
+| `docker kill` (SIGKILL) | no | 100 % | 11,3 s | 2 × `502`, 4 × `ReadTimeout` |
+| `docker kill` (SIGKILL) | sí | 100 % | 11,3 s | 2 × `502`, 7 × `ReadTimeout` |
+| `docker stop` (SIGTERM) | no | 100 % | 11,2 s | 3 × `502`, 2 × `ReadTimeout` |
+| `docker stop`, con `dialTimeout` de 1 s | no | 100 % | **2,2 s** | 3 × `502`, 3 × `504` |
+
+- El cliente nunca vio un error: los reintentos del orquestador cubren la réplica caída.
+- Los `ReadTimeout` eran requests que Traefik mandaba a la IP de la réplica ya detenida, en el
+  instante antes de enterarse por Docker: conectar esperaba hasta el timeout del orquestador
+  (10 s). Con `dialTimeout: 1s` (`traefik-interno/dinamico.yml`) Traefik responde `504`
+  enseguida y el orquestador reintenta contra otra réplica.
+- Con `SIGKILL`, las extracciones que esa réplica tenía en curso se pierden sin respuesta y se
+  recuperan por timeout. Con `docker stop` la réplica las termina antes de salir (código 0); ver
+  [Finalización segura](#finalización-segura-12-factor-ix).
+- **El cortocircuito no se activó** en estas pruebas: una réplica caída sobre tres no supera el
+  30 % de errores, y Traefik la saca de la lista. Sirve cuando una réplica sigue viva pero
+  devuelve errores. Queda definido y desactivado por defecto.
 
 ## Prueba de carga (vegeta)
 
@@ -323,6 +389,21 @@ Resultados del 2026-10-07 (3 réplicas de extracción, por Traefik):
 | 20/s | 128 ms | 115 ms | 222 ms | 275 ms | 600 × 409 |
 | 40/s | 154 ms | 138 ms | 280 ms | 446 ms | 1200 × 409 |
 | 60/s | 20,6 s | 22,8 s | 30 s | 30 s | 971 × 409 y 829 cortadas por el timeout de vegeta (30 s) |
+
+**Escenario del profesor: 10 000 peticiones** (2026-10-07 noche, `extraccion-texto:1.0.3` con
+`traefik-interno`):
+
+| Tasa | Peticiones | Promedio | p50 | p95 | p99 | Máximo | Respuestas |
+|---|---|---|---|---|---|---|---|
+| 30/s | 10 020 | **115 ms** | 104 ms | 185 ms | 258 ms | 685 ms | 10 020 × 409, 0 errores |
+| 40/s | 10 000 | 10,4 s | 2,7 s | 30 s | 30 s | 30 s | 5319 × 409, 1929 × 404, 2752 cortadas |
+
+- **30/s se sostiene** durante los 5,5 minutos, muy por debajo de los 440 ms del profesor.
+- **40/s está en el límite** de la capacidad (~41 PDF/s): en 30 s alcanzaba (154 ms), pero en
+  4 minutos cualquier baja de rendimiento arma una cola que no se vacía. Durante la saturación
+  el healthcheck del orquestador (timeout 2 s) falló tres veces, Docker lo marcó `unhealthy` y
+  el Traefik de la cátedra lo sacó de la rota: de ahí los `404`. Se recuperó solo al bajar la
+  carga.
 
 A 60/s se supera la capacidad medida con k6 (~41 PDF/s con 3 réplicas) y la cola crece sin
 límite. El sistema no se cae: los contenedores siguen `healthy`, el orquestador no devuelve
@@ -388,13 +469,124 @@ Snyk queda para el final, con la cuenta de la facultad (es web).
   con TDD en la rama `fix/fechas-milisegundos` de Orquestador: dos commits rojos y el
   arreglo. De ahí sale la imagen `orquestador:1.0.1`.
 
+## Decisiones y respuestas del profesor (2026-10-07)
+
+Preguntas que llevamos a la clase, la respuesta y qué cambió en el proyecto.
+
+| Pregunta | Respuesta del profesor | En el proyecto |
+|---|---|---|
+| ¿Qué escenario usa para la prueba de carga? ¿El `409` de un PDF repetido cuenta como válido? | vegeta con **10 000 peticiones**; el PDF repetido **es válido**. | El `409` ya se contaba como correcto (pasa por validación y extracción completas). **Hecho:** 10 020 peticiones a 30/s, 115 ms promedio, 0 errores (ver [vegeta](#prueba-de-carga-vegeta)). |
+| Docker reparte extracción por conexión y con pocos clientes una réplica queda ociosa. ¿Ruteamos extracción por Traefik aunque no sea pública? | Traefik tiene que balancearlo automáticamente; probar **con y sin cortocircuito**. | **Hecho:** `traefik-interno`, sin puertos publicados; reparto parejo y 37 PDF/s con 5 VUs contra 17 directo. Medido con y sin cortocircuito (ver [Balanceo](#balanceo-de-extracción-con-traefik-interno-contrato-120)). |
+| Con Redis caído el cliente no tenía timeout de conexión. ¿Timeout por variable o fijo en el código? | Sí hay que ponerle timeout, y el **`/health` tiene que verificar si Redis funciona**. | Timeout corto en los dos servicios de persistencia. **Hecho:** `/health` informa MongoDB y Redis (ver [`/health` con dependencias](#health-con-dependencias)). |
+| Si Redis se cae y vuelve, ¿hay que recuperar los datos viejos? | No: si Redis se cae no hay por qué conservar los datos. La caché igual se termina borrando. | Ya resuelto: Redis corre sin persistencia y arranca vacío. |
+
+### Por qué no se guarda el PDF
+
+El sistema guarda solo el texto extraído y los metadatos; el binario no se persiste (contrato,
+modelo común). Además del tema legal, con el tiempo se acumulan muchos PDF y el volumen crece
+mucho. Si hiciera falta guardarlos, lo correcto no es una carpeta del contenedor ni MongoDB sino
+un **object storage**: guarda objetos (binarios, JSON, lo que sea) identificados por clave y con
+**etiquetas** en lugar de carpetas, y es más eficiente para compartir archivos que una base de
+datos (es lo que se usa en la nube). Queda fuera del alcance.
+
+### Por qué MongoDB no va dentro del microservicio
+
+MongoDB corre en su propio contenedor, con volumen nombrado, y los servicios se conectan por
+`MONGO_URI` (12-Factor IV y VI). Si la base fuera parte del microservicio, al escalar a 3 réplicas
+habría 3 bases distintas, cada una con datos diferentes. Por eso los procesos son sin estado y el
+estado vive en un servicio de apoyo compartido.
+
+### Patrones de microservicios que usa el proyecto
+
+| Patrón | Dónde |
+|---|---|
+| **SAGA orquestada** | Una "transacción" que cruza servicios no puede usar una transacción de base de datos. El orquestador ejecuta los pasos (validar → extraer → guardar) y, si el alta queda incierta, ejecuta una **compensación** (borrar lo que se creó). Es idempotente y queda en los logs. |
+| **API Gateway / proxy inverso** | Traefik: única entrada pública, TLS, ruteo por `Host`. |
+| **Balanceo de carga y cortocircuito** | Traefik reparte entre réplicas y aplica el *circuit breaker*; el código solo reintenta (`RETRY_ATTEMPTS`). |
+| **Descubrimiento de servicios** | Traefik lee los contenedores y sus labels desde Docker; dentro de `redutn` los servicios se encuentran por nombre (DNS de Docker). |
+| **Cache-aside** | `persistencia-consultas`: busca en Redis, si no está consulta MongoDB y lo guarda. |
+| **CQRS (separación lectura/escritura)** | Un servicio solo escribe (`persistencia-actualizaciones`) y otro solo lee (`persistencia-consultas`). |
+| **Health check** | `GET /health` en todos; Docker y `depends_on: service_healthy` lo usan. |
+| **Correlation ID (traza)** | `X-Correlation-ID` viaja por todos los servicios y aparece en cada línea de log. |
+| **Repository y puertos/adaptadores** | En cada servicio: el negocio depende de abstracciones; MongoDB, Redis y los clientes HTTP son adaptadores. |
+
+### Observabilidad: logs, trazas y métricas
+
+- **Logs (obligatorio, 12-Factor XI):** a `stdout`, niveles `DEBUG`/`INFO`/`WARNING`/`ERROR`,
+  configuración en un `logging.json` por repo y sin datos sensibles. Qué va en cada nivel está
+  en el [contrato](CONTRATO.md#logs). **Hecho en los cinco servicios.** Cada uno registra
+  en `INFO` su paso del flujo: validación aceptada (`tamano_bytes`), texto extraído
+  (`paginas`, `checksum`), documento creado (`id`), caché `HIT`/`MISS`. Ningún log tiene el
+  nombre del archivo, el texto ni el Base64: se comprobó subiendo `demo-de-juan-perez.pdf` y
+  buscando `juan-perez` en `docker compose logs` (0 resultados).
+
+  Recorrido real de un `POST /pdf` (2026-10-07, `docker compose logs | grep <id>`, ordenado):
+
+  ```text
+  orquestador      INFO ... correlation_id=75c93b70-... validacion aceptada
+  validacion-pdf   INFO ... correlation_id=75c93b70-... pdf valido tamano_bytes=11378
+  extraccion-texto INFO ... correlation_id=75c93b70-... texto extraido paginas=10 tamano_bytes=11378 caracteres=36839 checksum=7e72f0...
+  orquestador      INFO ... correlation_id=75c93b70-... texto extraido paginas=10 checksum=7e72f0...
+  actualizaciones  INFO ... correlation_id=75c93b70-... documento creado id=13f4459b-... checksum=7e72f0...
+  orquestador      INFO ... correlation_id=75c93b70-... documento creado id=13f4459b-... checksum=7e72f0...
+  orquestador      INFO ... correlation_id=75c93b70-... method=POST path=/pdf status=201 duracion_ms=117.1
+  ```
+- **Trazas:** con réplicas no se sabe qué instancia atendió cada paso; el `correlation_id` es el
+  identificador único de cada petición y permite seguirla por todos los servicios:
+  `docker compose logs | grep <correlation_id>`. Ya implementado.
+- **Métricas** (uso de CPU y memoria) y el stack de búsqueda y paneles (Elasticsearch, un
+  recolector y Grafana): el profesor los mostró pero **no son obligatorios**; no se implementan.
+  Para la carga alcanza `docker stats` durante la prueba.
+
+### Finalización segura (12-Factor IX)
+
+Al detener un contenedor Docker manda `SIGTERM` y, si no termina a tiempo, `SIGKILL`. Si el
+proceso muere con requests en curso, el cliente se queda sin respuesta y puede quedar una
+escritura a medias. El contrato 1.2.0 fija qué hace cada servicio: dejar de aceptar conexiones,
+terminar lo que está en curso, cerrar las conexiones y salir con código 0, todo registrado en
+los logs. En el compose, `stop_grace_period: 40s` en los cinco servicios.
+
+**Hecho en los cinco servicios** (`--timeout-graceful-shutdown 30`, cierre de httpx, MongoDB
+y Redis en el `lifespan`) y probado:
+
+- Extracción sola: extracción de 18 s y `docker stop -t 40` a los 4 s → la request termina con
+  `200`, una conexión nueva se rechaza, `ExitCode` 0 y en los logs `Shutting down` → la
+  extracción termina → `apagado iniciado` → `apagado completo`.
+- En el stack: `docker stop` de una réplica de extracción con 5 VUs de carga → 100 % de checks,
+  `ExitCode` 0 (ver [Balanceo](#balanceo-de-extracción-con-traefik-interno-contrato-120)).
+- Todo el stack: `docker compose stop` de los cinco servicios (7 contenedores) → los 7 con
+  `ExitCode` 0 y `apagado completo` en su log.
+
+### `/health` con dependencias
+
+Las dos persistencias consultan MongoDB y Redis en `/health` (contrato 1.2.0). Probado en el
+stack (2026-10-07):
+
+| Situación | `persistencia-actualizaciones` y `persistencia-consultas` |
+|---|---|
+| Todo arriba | `200 {"status":"ok","dependencias":{"mongodb":"ok","redis":"ok"}}` en ~8 ms |
+| Redis detenido | `200 {"status":"ok","dependencias":{"mongodb":"ok","redis":"caido"}}`: siguen funcionando (fail-open) |
+| MongoDB detenido | `503 {"status":"error","dependencias":{"mongodb":"caido","redis":"ok"}}` en 1,0 s; `POST /pdf` del orquestador → `503` |
+
+Validación, extracción y el orquestador no tienen servicios de apoyo y responden
+`{"status": "ok"}`.
+
+### Swagger
+
+Cada servicio expone la documentación interactiva de FastAPI en `/docs` (Swagger UI) y el
+esquema en `/openapi.json`. El del orquestador se abre desde el host en
+`https://pdf.universidad.localhost/docs`; los internos solo se alcanzan dentro de `redutn`.
+
+### `depends_on`
+
+El profesor advirtió que `depends_on` solo no alcanza: el contenedor puede estar arrancado y el
+puerto todavía cerrado. Acá se usa `depends_on` con `condition: service_healthy`, que espera a
+que el `/health` del servicio responda.
+
 ## Deuda técnica
 
-- **Consultas tarda 4 s por request con Redis caído** (7,7 s el listado). Responde bien,
-  pero cada request espera al cliente Redis al leer y al escribir la caché: el cliente se crea
-  sin `socket_connect_timeout` (`persistencia-consultas/app/core/database.py`). Actualizaciones
-  sí lo configura y tarda 2 s. Arreglarlo con una variable nueva implica versionar el
-  contrato, así que se lleva al grupo.
+- **Consultas tardaba 4 s por request con Redis caído:** **resuelto** (2026-10-07, PR #18
+  de consultas): timeout corto del cliente Redis, 1,0 s por request.
 - **Datos viejos en caché al volver Redis** (A9): **resuelto** (2026-10-07). Redis guardaba
   un snapshot al apagarse y, si mientras estuvo caído hubo una escritura, al volver devolvía el
   listado viejo hasta que vencía `REDIS_TTL_SECONDS` (se comprobó: 217 s). Ahora Redis corre
@@ -402,18 +594,24 @@ Snyk queda para el final, con la cuenta de la facultad (es web).
   estado que deba sobrevivir a un reinicio (12-Factor VI), así que arranca vacío. Queda la
   ventana mientras Redis está caído *y no se reinicia* (por ejemplo, una partición de red),
   acotada por el TTL.
-- **Traefik no balancea extracción.** Solo el orquestador pasa por Traefik; el reparto entre
-  las 3 réplicas de extracción lo hace el DNS de Docker por conexión, y con pocos clientes
-  puede quedar una réplica ociosa (ver "Reparto entre réplicas" en la carga).
-- **Vulnerabilidades de las imágenes** (ver Grype): base Debian 12 en extracción y
-  dependencias de Python con arreglo disponible en validación y consultas. Lo arregla cada
-  dueño en su repo.
+- **Orquestador fuera de Traefik al saturarse.** Con más carga que capacidad, su healthcheck
+  (timeout 2 s, 3 reintentos) falla, Docker lo marca `unhealthy` y Traefik lo saca (`404`).
+  Se podría dar más margen al healthcheck; la solución real es no superar ~35/s o sumar
+  réplicas.
+- **Extracciones perdidas con `SIGKILL`.** Si una réplica muere sin `SIGTERM`, sus requests en
+  curso se recuperan por timeout (10 s) y reintento.
+- **Vulnerabilidades de las imágenes:** **resuelto** lo que tenía arreglo (ver Grype). Quedan
+  las High de Debian 13 sin arreglo publicado.
 - **Extracción sigue trabajando después de un timeout.** El orquestador corta y reintenta,
   pero el servidor no cancela la extracción en curso: bajo carga, un timeout multiplica por
   `RETRY_ATTEMPTS + 1` el trabajo de extracción. Conviene un `REQUEST_TIMEOUT_SECONDS` con
   margen sobre el p95 medido.
-- **Consultas no registra si fue HIT o MISS**; solo se ve en `duracion_ms`.
-- **`X-Extraction-Time-Ms` no está en el contrato.** Extracción lo devuelve y el orquestador
-  lo reenvía (como el monolito) para medir la extracción aparte del total; si el grupo lo
-  quiere oficial, se agrega en una versión nueva del contrato. Falta repetir la prueba de
-  carga con `orquestador:1.0.2` para tener la columna de extracción medida así.
+- **Consultas no registraba si fue HIT o MISS:** **resuelto** en `persistencia-consultas:1.0.2`
+  (`cache HIT`/`cache MISS` en `INFO`).
+- **Tiempo de extracción con el header:** medido con `orquestador:1.0.3` y PDFs nuevos
+  (semilla `n`, 1 VU): `tiempo_extraccion_ms` 110 ms promedio (10 altas), total 147 ms. El
+  header solo viene en los `201`: con PDFs repetidos (`409`) la extracción se ve en el log de
+  `extraccion-texto` (`duracion_ms`).
+- **El orquestador puede pasar los 30 s de gracia** en su peor caso (tres intentos de 10 s):
+  si el apagado lo corta, el documento queda guardado completo y reenviar el PDF da `409`.
+- **Sin métricas ni paneles** (Grafana, Elasticsearch): opcionales según el profesor.

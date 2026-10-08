@@ -2,7 +2,7 @@
 
 ```
 Contrato: microservicios-pdf
-Versión: 1.1.0
+Versión: 1.2.0
 Formato: JSON UTF-8
 Identificación: UUID
 Fechas: ISO-8601 UTC
@@ -13,6 +13,19 @@ Pydantic de cada servicio son su implementación. Cualquier cambio sube la versi
 en [Cambios](#cambios): compatible (minor) o `BREAKING CHANGE` (major).
 
 ## Cambios
+
+### 1.2.0 (2026-10-07) — compatible con 1.1.0
+
+Incorpora las respuestas del profesor en la clase del 2026-10-07 (12-Factor IX y XI, `/health`
+y balanceo por Traefik). No cambia endpoints de negocio, campos ni códigos de error. La variable
+nueva es opcional.
+
+| # | Cambio | Sección |
+|---|---|---|
+| 1 | `/health` de las persistencias informa MongoDB y Redis; `503` solo si MongoDB no responde. | [Transversales](#transversales) |
+| 2 | Logs (12-Factor XI): archivo `logging.json` por repo, variable `LOG_LEVEL`, qué se registra en cada nivel y qué no se registra nunca. | [Logs](#logs) |
+| 3 | Finalización segura (12-Factor IX): qué hace cada servicio al recibir `SIGTERM`. | [Finalización segura](#finalización-segura) |
+| 4 | Extracción se balancea por request con un Traefik interno (no público), con cortocircuito opcional. Reemplaza el punto 13 de la 1.1.0. | [Despliegue](#despliegue) |
 
 ### 1.1.0 (2026-10-07) — compatible con 1.0.0
 
@@ -106,13 +119,78 @@ Versión inicial, congelada antes de programar.
 
 ## Transversales
 
-- Todo servicio expone `GET /health` → `200 {"status": "ok"}`, sin consultar sus dependencias.
+- Todo servicio expone `GET /health` → `200 {"status": "ok"}`.
+- *(1.2.0)* Los servicios con servicios de apoyo (`persistencia-actualizaciones` y
+  `persistencia-consultas`) los consultan en `/health`, cada uno con un timeout de 1 s como
+  máximo, y lo informan:
+
+  ```json
+  {"status": "ok", "dependencias": {"mongodb": "ok", "redis": "caido"}}
+  ```
+
+  | MongoDB | Redis | Respuesta |
+  |---|---|---|
+  | `ok` | `ok` o `caido` | `200`, `"status": "ok"` (Redis caído es *fail-open*: el servicio sigue funcionando) |
+  | `caido` | cualquiera | `503`, `"status": "error"` |
+
+  Validación, extracción y orquestador no tienen servicios de apoyo y responden
+  `{"status": "ok"}`. El orquestador **no** consulta el `/health` de los otros servicios: una
+  dependencia caída se informa por request con `503 DEPENDENCY_UNAVAILABLE`.
 - `X-Correlation-ID`: si llega se reutiliza y si no se genera un UUID; se devuelve en la
   respuesta, se envía a cada servicio llamado y aparece en los logs y en el cuerpo de los errores.
   *(1.1.0)* El orquestador, que es la entrada pública, **garantiza un UUID**: si el header falta o
   no es un UUID, genera uno nuevo. Los servicios internos reutilizan el valor que reciben (siempre
   un UUID cuando los llama el orquestador).
-- Logs a `stdout`, con el `correlation_id` en cada línea.
+- Logs a `stdout`, con el `correlation_id` en cada línea. *(1.2.0)* Ver [Logs](#logs).
+- *(1.2.0)* Finalización segura ante `SIGTERM`. Ver [Finalización segura](#finalización-segura).
+- *(1.2.0)* Todos los servicios aceptan `LOG_LEVEL` (opcional, ver [Logs](#logs)).
+
+## Logs
+
+*(1.2.0)* 12-Factor XI: los logs son un flujo de eventos a `stdout`; ningún servicio escribe
+archivos de log. Con réplicas, el `correlation_id` es la traza que permite seguir una request
+por todos los servicios (`docker compose logs | grep <correlation_id>`).
+
+- **Configuración:** un archivo `logging.json` en la raíz de cada repo (formato `dictConfig` de
+  la librería estándar), cargado al iniciar. Se copia a la imagen.
+- **Nivel:** variable `LOG_LEVEL` (`DEBUG`, `INFO`, `WARNING`, `ERROR`), opcional, `INFO` por
+  defecto. Un valor distinto es error de configuración: el servicio no arranca.
+- **Formato:** una línea por evento,
+  `<fecha ISO> <NIVEL> <logger> correlation_id=<id> <mensaje> clave=valor ...`. Los eventos
+  fuera de una request (inicio y apagado) llevan `correlation_id=-`.
+
+| Nivel | Qué se registra |
+|---|---|
+| `DEBUG` | Detalle para diagnosticar: etapas internas con su duración, claves de caché usadas. Apagado en el despliegue. |
+| `INFO` | Cada request atendida (`method`, `path`, `status`, `duracion_ms`) y los eventos del negocio: PDF recibido y su tamaño, validación aceptada o rechazada (con el `code`), texto extraído (`paginas`, `checksum`), documento creado, modificado o borrado (`id`), caché `HIT`/`MISS`, inicio y apagado del servicio. |
+| `WARNING` | Situaciones recuperables: reintento hacia otro servicio, Redis caído (*fail-open*), lock no obtenido, compensación SAGA ejecutada. |
+| `ERROR` | Fallas no esperadas (con traceback), compensación SAGA fallida, servicio de apoyo caído al iniciar. |
+
+**Nunca se registra:** el contenido del PDF (`archivo_base64`), el `texto` extraído, el `nombre`
+del archivo (puede contener datos personales), cuerpos completos de request o response, headers
+de autenticación ni URIs con credenciales (`MONGO_URI`, `REDIS_URL`). Para identificar un
+documento se usan el `id` y el `checksum`.
+
+## Finalización segura
+
+*(1.2.0)* 12-Factor IX: cualquier contenedor se puede detener (`docker stop`, `docker compose
+down`, bajar réplicas) sin dejar requests cortadas ni datos a medias.
+
+Al recibir `SIGTERM` cada servicio:
+
+1. Deja de aceptar conexiones nuevas (Traefik y el DNS de Docker dejan de mandarle tráfico).
+2. Termina las requests en curso, con un plazo de gracia de **30 s**
+   (`uvicorn --timeout-graceful-shutdown 30`).
+3. Cierra sus clientes en el `lifespan` (httpx, Motor, Redis).
+4. Registra `INFO apagado iniciado` y `INFO apagado completo` y termina con **código 0**.
+
+Para que la señal llegue, uvicorn es el proceso PID 1 del contenedor (`CMD` en forma exec, o
+`exec` dentro de `sh -c`). En el compose, `stop_grace_period` (40 s) es mayor que el plazo de
+gracia, para que Docker no mande `SIGKILL` antes de tiempo.
+
+Si igual llega un `SIGKILL` a mitad de una request, el contrato ya cubre los casos: un alta en
+persistencia sin respuesta la compensa la SAGA del orquestador, y MongoDB no guarda un documento
+a medias (cada alta es una sola escritura).
 
 ## Servicios
 
@@ -122,7 +200,7 @@ Versión inicial, congelada antes de programar.
 - **No hace:** extraer texto, calcular checksum, usar MongoDB ni Redis.
 - `POST /validar` — `{"archivo_base64", "nombre"}` → `{"valido": true, "nombre", "tamano_bytes"}`.
 - Error: `{"valido": false, "error": {...}}` con el formato común.
-- Variables: `PDF_MAX_SIZE_MB`.
+- Variables: `PDF_MAX_SIZE_MB`, *(1.2.0)* `LOG_LEVEL`.
 
 ### `extraccion-texto`
 
@@ -131,7 +209,7 @@ Versión inicial, congelada antes de programar.
 - **No hace:** persistir, usar MongoDB ni Redis.
 - `POST /extraer` — `{"archivo_base64", "nombre"}` →
   `{"nombre", "texto", "checksum", "tamano_bytes", "paginas"}`.
-- Variables: ninguna del contrato.
+- Variables: *(1.2.0)* `LOG_LEVEL`.
 
 *(1.1.0)*
 
@@ -154,7 +232,7 @@ Versión inicial, congelada antes de programar.
 - `DELETE /pdf/{id}` → `204`.
 - `checksum` con índice único: duplicado → `409 DUPLICATE_CHECKSUM`.
 - Variables: `MONGO_URI`, `MONGO_DATABASE`, `MONGO_COLLECTION`, `REDIS_URL`,
-  `REDIS_TTL_SECONDS`, `LOCK_TIMEOUT_SECONDS`.
+  `REDIS_TTL_SECONDS`, `LOCK_TIMEOUT_SECONDS`, *(1.2.0)* `LOG_LEVEL`.
 
 *(1.1.0)*
 
@@ -177,7 +255,8 @@ Versión inicial, congelada antes de programar.
 - `GET /pdf?limit=20&offset=0` → `{"items", "total", "limit", "offset"}`.
 - `GET /pdf/{id}`, `GET /pdf/checksum/{checksum}`.
 - Claves: `pdf:id:{id}`, `pdf:checksum:{checksum}`, `pdf:list:{hash-de-parametros}`.
-- Variables: `MONGO_URI`, `MONGO_DATABASE`, `MONGO_COLLECTION`, `REDIS_URL`, `REDIS_TTL_SECONDS`.
+- Variables: `MONGO_URI`, `MONGO_DATABASE`, `MONGO_COLLECTION`, `REDIS_URL`, `REDIS_TTL_SECONDS`,
+  *(1.2.0)* `LOG_LEVEL`.
 
 *(1.1.0)*
 
@@ -195,7 +274,7 @@ Versión inicial, congelada antes de programar.
 - `POST /pdf` — `{"archivo_base64", "nombre"}` → `201` con el documento de persistencia.
 - Variables: `VALIDACION_URL`, `EXTRACCION_URL`, `PERSISTENCIA_CONSULTAS_URL`,
   `PERSISTENCIA_ACTUALIZACIONES_URL`, `REQUEST_TIMEOUT_SECONDS`, `RETRY_ATTEMPTS`,
-  `RETRY_DELAY_SECONDS`.
+  `RETRY_DELAY_SECONDS`, *(1.2.0)* `LOG_LEVEL`.
 
 *(1.1.0)*
 
@@ -241,6 +320,23 @@ Versión inicial, congelada antes de programar.
 - Todos los servicios en la red externa `redutn`. Ninguno publica puertos en el host.
 - **Solo el orquestador es público**, a través de Traefik (`traefik.enable=true`). Validación,
   extracción y persistencia son internos.
-- Las réplicas de extracción las reparte Docker entre conexiones. **No** se rutea extracción por
-  Traefik para balancear por request: la convertiría en un servicio publicado. Si hace falta más
-  reparto, se resuelve con más procesos dentro de extracción.
+- ~~Las réplicas de extracción las reparte Docker entre conexiones; no se rutea extracción por
+  Traefik.~~ Reemplazado en la 1.2.0.
+
+*(1.2.0)* **Balanceo de extracción por Traefik, sin publicarla.**
+
+- El DNS de Docker reparte por conexión y el orquestador reutiliza conexiones (keep-alive): con
+  pocos clientes una réplica queda sin trabajo. Por indicación del profesor, el reparto lo hace
+  Traefik, que balancea **por request** (round robin) entre las réplicas que descubre.
+- Se usa un **Traefik interno** (`traefik-interno`) en el compose de integración, separado del
+  de la cátedra (que fuerza HTTPS en todo y no se modifica): sin puertos publicados, solo en
+  `redutn`, con un entrypoint HTTP propio y que solo descubre los contenedores con la label
+  `microservicios-pdf.balanceo=interno`. El de la cátedra no ve a extracción (no lleva
+  `traefik.enable=true`), así que extracción sigue siendo interna: no se alcanza desde el host.
+- `EXTRACCION_URL` apunta a `traefik-interno`; el código del orquestador no cambia.
+- **Cortocircuito** (*circuit breaker*): lo aplica Traefik con su middleware `circuitBreaker`,
+  no se programa. Se mide con y sin él; la expresión y los resultados están en el README de
+  integración. Con el circuito abierto Traefik responde `503`, que el orquestador ya traduce a
+  `503 DEPENDENCY_UNAVAILABLE`.
+- `depends_on` con `condition: service_healthy` espera el `/health` de cada servicio (no solo
+  que el contenedor arranque), así que no hay carrera con un puerto todavía cerrado.

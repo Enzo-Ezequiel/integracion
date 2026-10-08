@@ -1,0 +1,7 @@
+# Aplica el cortocircuito (circuit breaker) de traefik-interno al router de extracción.
+# Uso: docker compose -f docker-compose.yml -f docker-compose.cortocircuito.yml up -d
+# El middleware está definido en docker-compose.yml; este archivo solo lo engancha.
+services:
+  extraccion-texto:
+    labels:
+      - "traefik.http.routers.extraccion.middlewares=extraccion-cortocircuito"

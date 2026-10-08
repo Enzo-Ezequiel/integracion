@@ -20,16 +20,20 @@ services:
         condition: service_healthy
       extraccion-texto:
         condition: service_healthy
+      traefik-interno:
+        condition: service_healthy
       persistencia-actualizaciones:
         condition: service_healthy
       persistencia-consultas:
         condition: service_healthy
+    stop_grace_period: 40s
     restart: unless-stopped
 
   validacion-pdf:
     image: validacion-pdf:${VALIDACION_VERSION:?definir en .env}
     env_file: ./env/validacion.env
     networks: [redutn]
+    stop_grace_period: 40s
     restart: unless-stopped
 
   extraccion-texto:
@@ -40,6 +44,44 @@ services:
     # Con 3 réplicas se llega a ~41 PDF/s (ver README, "Prueba de carga").
     deploy:
       replicas: 3
+    # Sin traefik.enable: el Traefik de la cátedra no la publica. La label de balanceo la
+    # descubre solo traefik-interno, que reparte por request entre las réplicas.
+    labels:
+      - "microservicios-pdf.balanceo=interno"
+      - "traefik.http.routers.extraccion.entrypoints=web"
+      - "traefik.http.routers.extraccion.rule=PathPrefix(`/`)"
+      - "traefik.http.services.extraccion.loadbalancer.server.port=8000"
+      - "traefik.http.services.extraccion.loadbalancer.serverstransport=extraccion@file"
+      # Cortocircuito: se define siempre y se aplica con docker-compose.cortocircuito.yml.
+      - "traefik.http.middlewares.extraccion-cortocircuito.circuitbreaker.expression=NetworkErrorRatio() > 0.30 || ResponseCodeRatio(500, 600, 0, 600) > 0.30"
+    stop_grace_period: 40s
+    restart: unless-stopped
+
+  # Balanceador interno de extracción (contrato 1.2.0, "Despliegue"). Separado del Traefik
+  # de la cátedra, que fuerza HTTPS en todo: este habla HTTP plano dentro de redutn, no
+  # publica puertos y solo descubre contenedores con microservicios-pdf.balanceo=interno.
+  traefik-interno:
+    image: traefik:v3.6
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedByDefault=true"
+      - "--providers.docker.constraints=Label(`microservicios-pdf.balanceo`,`interno`)"
+      - "--providers.docker.network=redutn"
+      - "--providers.file.filename=/etc/traefik/dinamico.yml"
+      - "--entrypoints.web.address=:80"
+      - "--ping=true"
+      - "--log.level=INFO"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik-interno/dinamico.yml:/etc/traefik/dinamico.yml:ro
+    security_opt:
+      - no-new-privileges:true
+    networks: [redutn]
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
   persistencia-actualizaciones:
@@ -53,6 +95,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    stop_grace_period: 40s
     restart: unless-stopped
 
   persistencia-consultas:
@@ -64,6 +107,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    stop_grace_period: 40s
     restart: unless-stopped
 
   # MongoDB y Redis no publican puertos: Traefik usa 27017 y 6379 como entrypoints TCP.
