@@ -2,7 +2,7 @@
 
 ```
 Contrato: microservicios-pdf
-Versión: 1.3.0
+Versión: 1.3.1
 Formato: JSON UTF-8
 Identificación: UUID
 Fechas: ISO-8601 UTC
@@ -13,6 +13,13 @@ Pydantic de cada servicio son su implementación. Cualquier cambio sube la versi
 en [Cambios](#cambios): compatible (minor) o `BREAKING CHANGE` (major).
 
 ## Cambios
+
+### 1.3.1 (2026-10-07) — compatible con 1.3.0
+
+Solo cambian los valores por defecto del backpressure de `POST /extract`, según la medición
+del TP de carga (`Extraccion-de-texto-pdf-/docs/informe-carga.md`, 5.3): `EXTRACT_MAX_QUEUE`
+20 → 100 y `EXTRACT_QUEUE_TIMEOUT_SECONDS` 10 → 25. Con 10 s se rechazaban requests que
+llegaban dentro de los 30 s del cliente. Imagen `extraccion-texto:1.1.1`.
 
 ### 1.3.0 (2026-10-07) — compatible con 1.2.0
 
@@ -244,8 +251,8 @@ a medias (cada alta es una sola escritura).
   encabezado. La conversión usa PyMuPDF (más rápido que `pypdf` para el TP).
 - Header `X-Extraction-Time-Ms`: incluye la espera por un worker libre.
 - Variables opcionales: `EXTRACT_WORKERS` (procesos de conversión por réplica, `1`),
-  `EXTRACT_MAX_QUEUE` (requests que pueden esperar un worker, `20`) y
-  `EXTRACT_QUEUE_TIMEOUT_SECONDS` (espera máxima, `10`).
+  `EXTRACT_MAX_QUEUE` (requests que pueden esperar un worker, `100`) y
+  `EXTRACT_QUEUE_TIMEOUT_SECONDS` (espera máxima, `25`). *(1.3.1: antes `20` y `10`.)*
 
 | Caso | Respuesta |
 |---|---|
