@@ -447,6 +447,53 @@ Qué queda:
   (`./scripts/levantar.sh` reconstruye todo y `./scripts/grype.sh` lo verifica).
 - `pip` de la imagen base (Medium/Low). Los servicios instalan con uv, no con pip.
 
+### Imágenes del contrato 1.3.0 (2026-10-08)
+
+Mismo script y misma versión de Grype (0.120.1), sobre las imágenes de `main` después de la
+tanda de versión en Swagger y TP de carga. Resumen completo en `seguridad/resumen.md`.
+
+| Imagen antes | Critical | High | Total | → | Imagen después | Critical | High | Total |
+|---|---|---|---|---|---|---|---|---|
+| `extraccion-texto:1.0.2` | 0 | 56 | 174 | → | `extraccion-texto:1.1.0` | 0 | 56 | 174 |
+| `persistencia-actualizaciones:1.0.1` | 0 | 57 | 176 | → | `persistencia-actualizaciones:1.0.3` | 0 | 57 | 176 |
+| `persistencia-consultas:1.0.1` | 0 | 57 | 185 | → | `persistencia-consultas:1.0.3` | 0 | 57 | 185 |
+| `validacion-pdf:1.0.1` | 0 | 57 | 176 | → | `validacion-pdf:1.0.3` | 0 | 57 | 176 |
+| `orquestador:1.0.1` | 0 | 55 | 172 | → | `orquestador:1.0.4` | 0 | 55 | 172 |
+
+- **Ninguna Critical** en las cinco.
+- **PyMuPDF** (dependencia nueva de `extraccion-texto:1.1.0`, versión 1.28.2 con MuPDF 1.28.2):
+  **0 vulnerabilidades**. Los números de extracción no cambiaron respecto de la 1.0.2. Ojo:
+  Grype revisa el paquete de Python; la librería MuPDF en C que viene dentro del wheel no se
+  analiza aparte.
+- **Ninguna High ni Critical de paquetes de Python** en ninguna imagen. Las 6 "de Python"
+  de cada una son de `pip` 24.0 de la imagen base (Medium/Low).
+- **Las High con arreglo disponible vienen del binario de `uv`**, no del código:
+  `quinn-proto` 0.11.14 (arreglo en 0.11.15) y `rustls-webpki` 0.103.10 (arreglo en
+  0.103.13) son librerías de Rust compiladas dentro de `/usr/local/bin/uv` (y `uvx` en
+  validación). Afectan a validación, extracción y las dos persistencias, que copian `uv` en
+  la imagen final. El orquestador usa un build en dos etapas y `uv` no llega a la imagen
+  final: por eso tiene 0. **Arreglado** en la sección siguiente.
+- El resto de las High (~55 por imagen) son del sistema operativo Debian 13, sin arreglo
+  publicado: se resuelven reconstruyendo cuando Debian lo publique.
+
+### Imágenes sin `uv` (2026-10-08)
+
+Validación, extracción y las dos persistencias montan `uv` solo durante el `RUN` que instala
+las dependencias (`RUN --mount=from=ghcr.io/astral-sh/uv:<versión>,source=/uv,target=/bin/uv
+uv sync ...`), así no queda en la imagen final. Rama `fix/imagen-sin-uv` en cada repo.
+
+| Imagen antes | High | High con arreglo | Total | Tamaño | → | Imagen después | High | High con arreglo | Total | Tamaño |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `validacion-pdf:1.0.3` | 57 | 2 | 176 | 82 MB | → | `validacion-pdf:1.0.4` | 55 | **0** | 172 | 56 MB |
+| `extraccion-texto:1.1.0` | 56 | 1 | 174 | 191 MB | → | `extraccion-texto:1.1.2` | 55 | **0** | 172 | 167 MB |
+| `persistencia-actualizaciones:1.0.3` | 57 | 2 | 176 | 91 MB | → | `persistencia-actualizaciones:1.0.4` | 55 | **0** | 172 | 66 MB |
+| `persistencia-consultas:1.0.3` | 57 | 2 | 185 | 90 MB | → | `persistencia-consultas:1.0.4` | 55 | **0** | 172 | 66 MB |
+| `orquestador:1.0.4` | 55 | 0 | 172 | — | → | `orquestador:1.0.4` (sin cambios) | 55 | 0 | 172 | — |
+
+Las cinco imágenes quedan con el mismo resultado: **0 Critical, 0 High con arreglo**, y las
+55 High son todas del sistema operativo Debian 13 sin arreglo publicado. Probado en el stack:
+humo de los cinco `/health` y `POST /pdf` por Traefik (`201` y `409` con el mismo PDF).
+
 Snyk queda para el final, con la cuenta de la facultad (es web).
 
 ## Hallazgos de la integración
