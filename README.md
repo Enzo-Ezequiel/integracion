@@ -472,11 +472,27 @@ tanda de versión en Swagger y TP de carga. Resumen completo en `seguridad/resum
   0.103.13) son librerías de Rust compiladas dentro de `/usr/local/bin/uv` (y `uvx` en
   validación). Afectan a validación, extracción y las dos persistencias, que copian `uv` en
   la imagen final. El orquestador usa un build en dos etapas y `uv` no llega a la imagen
-  final: por eso tiene 0. **Arreglo propuesto** para los otros cuatro: build multi-stage
-  como el orquestador (o borrar `uv` después de `uv sync`), o actualizar `uv`. Queda para
-  cada dueño.
+  final: por eso tiene 0. **Arreglado** en la sección siguiente.
 - El resto de las High (~55 por imagen) son del sistema operativo Debian 13, sin arreglo
   publicado: se resuelven reconstruyendo cuando Debian lo publique.
+
+### Imágenes sin `uv` (2026-10-08)
+
+Validación, extracción y las dos persistencias montan `uv` solo durante el `RUN` que instala
+las dependencias (`RUN --mount=from=ghcr.io/astral-sh/uv:<versión>,source=/uv,target=/bin/uv
+uv sync ...`), así no queda en la imagen final. Rama `fix/imagen-sin-uv` en cada repo.
+
+| Imagen antes | High | High con arreglo | Total | Tamaño | → | Imagen después | High | High con arreglo | Total | Tamaño |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `validacion-pdf:1.0.3` | 57 | 2 | 176 | 82 MB | → | `validacion-pdf:1.0.4` | 55 | **0** | 172 | 56 MB |
+| `extraccion-texto:1.1.0` | 56 | 1 | 174 | 191 MB | → | `extraccion-texto:1.1.2` | 55 | **0** | 172 | 167 MB |
+| `persistencia-actualizaciones:1.0.3` | 57 | 2 | 176 | 91 MB | → | `persistencia-actualizaciones:1.0.4` | 55 | **0** | 172 | 66 MB |
+| `persistencia-consultas:1.0.3` | 57 | 2 | 185 | 90 MB | → | `persistencia-consultas:1.0.4` | 55 | **0** | 172 | 66 MB |
+| `orquestador:1.0.4` | 55 | 0 | 172 | — | → | `orquestador:1.0.4` (sin cambios) | 55 | 0 | 172 | — |
+
+Las cinco imágenes quedan con el mismo resultado: **0 Critical, 0 High con arreglo**, y las
+55 High son todas del sistema operativo Debian 13 sin arreglo publicado. Probado en el stack:
+humo de los cinco `/health` y `POST /pdf` por Traefik (`201` y `409` con el mismo PDF).
 
 Snyk queda para el final, con la cuenta de la facultad (es web).
 
