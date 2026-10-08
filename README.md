@@ -18,7 +18,7 @@ profesor](#decisiones-y-respuestas-del-profesor-2026-10-07).
 | persistencia-actualizaciones | [matiasscanoo/persistencia-actualizaciones](https://github.com/matiasscanoo/persistencia-actualizaciones) | `persistencia-actualizaciones:1.0.3` | no |
 | persistencia-consultas | [ManuelGomez33/persistencia-consultas](https://github.com/ManuelGomez33/persistencia-consultas) | `persistencia-consultas:1.0.3` | no |
 | mongodb | — | `mongo:7.0` (volumen `mongo_data`) | no |
-| redis | — | `redis:7` (volumen `redis_data`) | no |
+| redis | — | `redis:7` (solo caché: sin volumen ni persistencia) | no |
 
 Ningún servicio publica puertos en el host. El orquestador es el único con labels de Traefik
 (`traefik.enable=true`); el Traefik del equipo (`dockers/traefik`, `exposedByDefault: false`)
