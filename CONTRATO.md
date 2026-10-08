@@ -2,7 +2,7 @@
 
 ```
 Contrato: microservicios-pdf
-Versión: 1.2.0
+Versión: 1.3.0
 Formato: JSON UTF-8
 Identificación: UUID
 Fechas: ISO-8601 UTC
@@ -13,6 +13,18 @@ Pydantic de cada servicio son su implementación. Cualquier cambio sube la versi
 en [Cambios](#cambios): compatible (minor) o `BREAKING CHANGE` (major).
 
 ## Cambios
+
+### 1.3.0 (2026-10-07) — compatible con 1.2.0
+
+Agrega a `extraccion-texto` el endpoint `POST /extract` del TP de carga y estrés (PDF binario
+→ Markdown). Es un endpoint nuevo: el orquestador y el resto de los servicios no lo usan, así
+que no cambia nada de lo existente. Las variables nuevas son opcionales.
+
+| # | Cambio | Sección |
+|---|---|---|
+| 1 | `POST /extract`: PDF binario en el body → `200 {"content", "page_count"}`, con PyMuPDF. | [extraccion-texto](#extraccion-texto) |
+| 2 | Backpressure de `/extract`: `503 DEPENDENCY_UNAVAILABLE` con `details.reason` y `Retry-After`. | [extraccion-texto](#extraccion-texto) |
+| 3 | Variables opcionales `EXTRACT_WORKERS`, `EXTRACT_MAX_QUEUE`, `EXTRACT_QUEUE_TIMEOUT_SECONDS`. | [extraccion-texto](#extraccion-texto) |
 
 ### 1.2.0 (2026-10-07) — compatible con 1.1.0
 
@@ -205,11 +217,12 @@ a medias (cada alta es una sola escritura).
 ### `extraccion-texto`
 
 - **Hace:** recibir un PDF validado, extraer el texto de todas las páginas con `pypdf`, contar las
-  páginas y calcular el checksum SHA-256.
+  páginas y calcular el checksum SHA-256. *(1.3.0)* Convertir un PDF binario a Markdown
+  (`POST /extract`, TP de carga).
 - **No hace:** persistir, usar MongoDB ni Redis.
 - `POST /extraer` — `{"archivo_base64", "nombre"}` →
   `{"nombre", "texto", "checksum", "tamano_bytes", "paginas"}`.
-- Variables: *(1.2.0)* `LOG_LEVEL`.
+- Variables: *(1.2.0)* `LOG_LEVEL`; *(1.3.0)* las `EXTRACT_*` de `/extract`, opcionales.
 
 *(1.1.0)*
 
@@ -222,6 +235,26 @@ a medias (cada alta es una sola escritura).
 
 - Header de respuesta `X-Extraction-Time-Ms`: milisegundos que tardó la extracción (decodificar,
   pypdf y checksum). Informativo, para medir la extracción aparte del total en las pruebas de carga.
+
+*(1.3.0)* **`POST /extract`** — TP de carga y estrés. Fuera del flujo del orquestador.
+
+- Request: el PDF binario en el body (`Content-Type: application/pdf`), sin Base64 ni nombre.
+- Response `200`: `{"content": "<Markdown>", "page_count": 3}`. El Markdown tiene un encabezado
+  `## Página N` por página seguido de su texto; una página sin texto queda solo con el
+  encabezado. La conversión usa PyMuPDF (más rápido que `pypdf` para el TP).
+- Header `X-Extraction-Time-Ms`: incluye la espera por un worker libre.
+- Variables opcionales: `EXTRACT_WORKERS` (procesos de conversión por réplica, `1`),
+  `EXTRACT_MAX_QUEUE` (requests que pueden esperar un worker, `20`) y
+  `EXTRACT_QUEUE_TIMEOUT_SECONDS` (espera máxima, `10`).
+
+| Caso | Respuesta |
+|---|---|
+| Body vacío o sin la firma `%PDF` | `422 PDF_INVALID` |
+| PyMuPDF no puede abrirlo | `422 PDF_CORRUPTED` |
+| Cola llena o espera vencida (*backpressure*) | `503 DEPENDENCY_UNAVAILABLE`, `details.reason` = `cola_llena` o `espera_agotada`, header `Retry-After: 1` |
+
+El `503` por saturación sigue el mismo patrón que el `lock_timeout` de actualizaciones: no se
+procesó nada y se puede reintentar. Se registra en `WARNING`.
 
 ### `persistencia-actualizaciones`
 

@@ -1,6 +1,6 @@
 # integracion — microservicios-pdf
 
-Levanta juntos los cinco microservicios del contrato `microservicios-pdf` v1.2.0 con
+Levanta juntos los cinco microservicios del contrato `microservicios-pdf` v1.3.0 con
 MongoDB y Redis reales, y documenta las pruebas de integración.
 
 El contrato completo, con su registro de cambios, está en [CONTRATO.md](CONTRATO.md). La 1.2.0
@@ -11,14 +11,14 @@ profesor](#decisiones-y-respuestas-del-profesor-2026-10-07).
 
 | Servicio | Repo | Imagen | Público |
 |---|---|---|---|
-| orquestador | [vale36/Orquestador](https://github.com/vale36/Orquestador) | `orquestador:1.0.3` | sí, por Traefik: `https://pdf.universidad.localhost` |
-| validacion-pdf | [valentinapenasco/validacion-pdf](https://github.com/valentinapenasco/validacion-pdf) | `validacion-pdf:1.0.2` | no |
-| extraccion-texto | [NicolasPerez735/Extraccion-de-texto-pdf-](https://github.com/NicolasPerez735/Extraccion-de-texto-pdf-) | `extraccion-texto:1.0.3` (3 réplicas) | no; la balancea `traefik-interno` |
+| orquestador | [vale36/Orquestador](https://github.com/vale36/Orquestador) | `orquestador:1.0.4` | sí, por Traefik: `https://pdf.universidad.localhost` |
+| validacion-pdf | [valentinapenasco/validacion-pdf](https://github.com/valentinapenasco/validacion-pdf) | `validacion-pdf:1.0.3` | no |
+| extraccion-texto | [NicolasPerez735/Extraccion-de-texto-pdf-](https://github.com/NicolasPerez735/Extraccion-de-texto-pdf-) | `extraccion-texto:1.1.0` (3 réplicas) | no; la balancea `traefik-interno` |
 | traefik-interno | — | `traefik:v3.6` | no (sin puertos publicados) |
-| persistencia-actualizaciones | [matiasscanoo/persistencia-actualizaciones](https://github.com/matiasscanoo/persistencia-actualizaciones) | `persistencia-actualizaciones:1.0.2` | no |
-| persistencia-consultas | [ManuelGomez33/persistencia-consultas](https://github.com/ManuelGomez33/persistencia-consultas) | `persistencia-consultas:1.0.2` | no |
+| persistencia-actualizaciones | [matiasscanoo/persistencia-actualizaciones](https://github.com/matiasscanoo/persistencia-actualizaciones) | `persistencia-actualizaciones:1.0.3` | no |
+| persistencia-consultas | [ManuelGomez33/persistencia-consultas](https://github.com/ManuelGomez33/persistencia-consultas) | `persistencia-consultas:1.0.3` | no |
 | mongodb | — | `mongo:7.0` (volumen `mongo_data`) | no |
-| redis | — | `redis:7` (volumen `redis_data`) | no |
+| redis | — | `redis:7` (solo caché: sin volumen ni persistencia) | no |
 
 Ningún servicio publica puertos en el host. El orquestador es el único con labels de Traefik
 (`traefik.enable=true`); el Traefik del equipo (`dockers/traefik`, `exposedByDefault: false`)
@@ -95,17 +95,17 @@ Los pasos, a mano:
 1. Construir las imágenes con su tag de versión, desde la carpeta grande del proyecto:
 
    ```bash
-   docker build -t validacion-pdf:1.0.2 validacion-pdf
-   docker build -t extraccion-texto:1.0.3 Extraccion-de-texto-pdf-
-   docker build -t persistencia-actualizaciones:1.0.2 persistencia-actualizaciones
-   docker build -t persistencia-consultas:1.0.2 persistencia-consultas
-   docker build -t orquestador:1.0.3 Orquestador
+   docker build -t validacion-pdf:1.0.3 validacion-pdf
+   docker build -t extraccion-texto:1.1.0 Extraccion-de-texto-pdf-
+   docker build -t persistencia-actualizaciones:1.0.3 persistencia-actualizaciones
+   docker build -t persistencia-consultas:1.0.3 persistencia-consultas
+   docker build -t orquestador:1.0.4 Orquestador
    ```
 
-   Estas versiones implementan el contrato 1.2.0 y salen de las ramas
-   `feat/logs-y-apagado-seguro` (extracción, validación, orquestador) y `feat/contrato-1.2.0`
-   (las dos persistencias). Hasta que se mergeen, construir desde esas ramas;
-   `scripts/levantar.sh` muestra en qué rama está cada repo.
+   Estas versiones implementan el contrato 1.3.0 (Swagger muestra la misma versión que el tag
+   de la imagen; extracción suma `POST /extract` del TP de carga) y salen de `main` de cada
+   repo una vez mergeadas `fix/version-en-swagger` (los cinco) y `feat/tp-carga-extract`
+   (extracción). `scripts/levantar.sh` muestra en qué rama está cada repo.
 
 2. Crear la configuración a partir de los ejemplos (no hay secretos; son nombres de la red
    interna):
