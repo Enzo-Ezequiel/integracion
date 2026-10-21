@@ -501,6 +501,9 @@ Como por el orquestador no se llega a saturar extracción, el mecanismo se prob�
   **no incluye el `reason`** (`cola_llena` / `espera_agotada`); solo va en la respuesta. Y el
   orquestador registra esos `503` como `ERROR`, aunque el contrato (1.4.0, `extraccion-texto`)
   dice que el `503` por saturación "se registra en `WARNING`" por ser recuperable.
+  **Arreglado** en `extraccion-texto:1.2.1` (la línea termina en `reason=<motivo>`) y en
+  `orquestador:1.0.6` (los errores del contrato van en `WARNING`; `ERROR` queda para lo no
+  previsto). Falta verlo en el stack levantado.
 
 ### Cortocircuito con backpressure
 
@@ -621,8 +624,8 @@ Resumen completo en `seguridad/resumen.md`.
   2026-10-19). **No la trajo la 1.0.5**: el `uv.lock` tiene esa versión de `certifi` desde la
   1.0.4; es un aviso nuevo de la base de Grype. Se arregla con
   `uv lock --upgrade-package certifi` (solo cambia `uv.lock`; 84 tests en verde). Probado:
-  la imagen con `certifi` 2026.10.19 da **0 Critical**, 55 High, 172 en total. Queda para la
-  próxima versión del orquestador.
+  la imagen con `certifi` 2026.10.19 da **0 Critical**, 55 High, 172 en total. Va en
+  `orquestador:1.0.6`; falta correr Grype sobre esa imagen.
 - Validación y las dos persistencias no cambiaron: 0 Critical, 55 High del sistema operativo.
 
 Snyk queda para el final, con la cuenta de la facultad (es web).
