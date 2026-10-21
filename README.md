@@ -410,6 +410,115 @@ límite. El sistema no se cae: los contenedores siguen `healthy`, el orquestador
 ningún 5xx y termina procesando las 3600 peticiones (las 829 cortadas se cortaron del lado
 del cliente).
 
+## Prueba de carga con extracción 1.2.0
+
+Desde `extraccion-texto:1.2.0` (contrato 1.4.0), `/extraer` usa PyMuPDF en el pool de
+procesos con backpressure de `/extract`, y `orquestador:1.0.5` no reintenta un `503` con
+`details.reason` `cola_llena` o `espera_agotada`. En `env/extraccion.env`,
+`EXTRACT_QUEUE_TIMEOUT_SECONDS=5`, menor que los 10 s de `REQUEST_TIMEOUT_SECONDS` del
+orquestador.
+
+Condiciones (2026-10-21): misma notebook (Docker Desktop, 12 CPUs, enchufada), por el Traefik
+de la cátedra contra `127.0.0.1`, `traefik-interno` sin cortocircuito, base vacía antes de cada
+escenario (`docker compose down -v`), 10 PDFs de 10 páginas (semilla `a`). La base de
+comparación son las tablas de arriba (pypdf; `extraccion-texto:1.0.3` en el escenario del
+profesor). La extracción se tomó de `duracion_ms` en el log de `extraccion-texto` (todas las
+requests, 201 y 409).
+
+### k6 (5 VUs, 30 s)
+
+| Réplicas | VUs | | Promedio | p95 | PDF/s | Extracción prom / p95 | Reparto |
+|---|---|---|---|---|---|---|---|
+| 3 | 5 | antes (pypdf, `traefik-interno`) | 133 ms | 189 ms | 37,4 | — | 250 / 250 / 250 |
+| 3 | 5 | **1.2.0** | **53 ms** | **68 ms** | **93,5** | 19 / 29 ms | 937 / 937 / 936 |
+| 1 | 1 | antes | 112 ms | 182 ms | 8,9 | 89 / 146 ms | — |
+| 1 | 1 | **1.2.0** | **55 ms** | **108 ms** | **18,1** | 24 / 51 ms | — |
+| 1 | 5 | antes | 598–604 ms | 1,02–1,12 s | 8,3 | 509–523 / 898–1003 ms | — |
+| 1 | 5 | **1.2.0** | **93 ms** | **128 ms** | **53,5** | 67 / 93 ms | — |
+
+100 % de checks y 0 errores en todas. `X-Extraction-Time-Ms` (solo en los 201) dio 40 ms de
+promedio con 3 réplicas.
+
+### vegeta (3 réplicas)
+
+| Escenario | | Peticiones | Promedio | p50 | p95 | p99 | Máximo | Respuestas |
+|---|---|---|---|---|---|---|---|---|
+| **30/s, 334 s (profesor)** | antes | 10 020 | 115 ms | 104 ms | 185 ms | 258 ms | 685 ms | 10 020 × 409 |
+| | **1.2.0** | 10 020 | **69 ms** | 54 ms | 139 ms | 171 ms | 10,7 s | 10 × 201, 10 010 × 409, 0 errores |
+| 40/s, 30 s | antes | 1 200 | 154 ms | 138 ms | 280 ms | 446 ms | — | 1 200 × 409 |
+| | **1.2.0** | 1 200 | **65 ms** | 53 ms | 135 ms | 169 ms | 221 ms | 10 × 201, 1 190 × 409 |
+| 40/s, 250 s | antes | 10 000 | 10,4 s | 2,7 s | 30 s | 30 s | 30 s | 5 319 × 409, 1 929 × 404, **2 752 cortadas** |
+| | **1.2.0** | 10 000 | **64 ms** | 53 ms | 130 ms | 169 ms | 315 ms | 10 × 201, 9 990 × 409, **0 cortadas** |
+| 60/s, 30 s | antes | 1 800 | 20,6 s | 22,8 s | 30 s | 30 s | 30 s | 971 × 409, **829 cortadas** |
+| | **1.2.0** | 1 800 | **62 ms** | 55 ms | 107 ms | 200 ms | 269 ms | 10 × 201, 1 790 × 409, **0 cortadas** |
+
+- **El escenario del profesor baja de 115 a 69 ms de promedio**, y 40/s y 60/s, que antes
+  saturaban, ahora se sostienen por debajo de 70 ms. No hubo ningún `503` ni reintento salvo
+  lo que sigue.
+- **Las 3 requests de más de 1 s** (10,6 s cada una, todas terminaron en 409): el primer
+  `POST /extraer` del orquestador **no llegó a ninguna réplica** (no hay log de extracción con
+  ese `correlation_id`); vencieron los 10 s de `REQUEST_TIMEOUT_SECONDS` y el reintento extrajo
+  en 17–68 ms. Se perdieron dentro de `redutn`, entre el orquestador y las réplicas, no en el
+  reenvío de puertos del host. `traefik-interno` no registró errores y no tiene access log, así
+  que no se sabe en qué tramo. Son 3 de 10 020 (0,03 %) y el reintento las cubre.
+
+### Dónde está ahora el techo
+
+| Tasa (30 s) | Peticiones | Promedio | Respuestas | Atendidas por extracción |
+|---|---|---|---|---|
+| 120/s | 3 599 | 25,6 s | 861 OK, 42 × `504`, 2 696 cortadas | 1 155 (166 ms prom), 0 × `503` |
+| 200/s | 5 999 | 27,4 s | 786 OK, 1 526 × `504`, 3 687 cortadas | 1 275 (154 ms prom), 0 × `503` |
+| 300/s | 9 000 | 28,3 s | 728 OK, 4 497 × `504`, 3 775 cortadas | 1 688 (116 ms prom), 0 × `503` |
+
+- **El cuello de botella pasó a ser el orquestador.** Con `docker stats` a 120/s: orquestador
+  **~105 % de CPU** (un núcleo entero: es un solo proceso de uvicorn), las tres réplicas de
+  extracción ~20 %, validación ~10 %, actualizaciones ~20 %. Las requests se acumulan antes de
+  llegar a extracción, así que su backpressure **no se activa** por este camino. La capacidad
+  del flujo completo es de **~90 PDF/s** en esta máquina (k6 con 5 VUs: 93,5).
+- Los `504` los responde el Traefik de la cátedra (el orquestador no registró ninguno); el resto
+  son cortes del timeout de 30 s de vegeta.
+- Para subir de ahí habría que escalar el orquestador (es *stateless*: réplicas detrás del
+  Traefik de la cátedra, o `--workers` en uvicorn). Queda para decidir con el grupo.
+
+### Backpressure de extracción
+
+Como por el orquestador no se llega a saturar extracción, el mecanismo se probó **forzándolo**:
+1 réplica y `EXTRACT_MAX_QUEUE=5` con un override que no se versiona.
+
+| Escenario | Peticiones | Promedio | p95 | Respuestas | `503` en el orquestador | Reintentos |
+|---|---|---|---|---|---|---|
+| 1 réplica, cola 100, 60/s 30 s | 1 800 | 433 ms | 600 ms | 1 800 OK | 0 | 0 |
+| 1 réplica, cola 100, 80/s 30 s | 2 400 | 21,3 s | 30 s | 1 040 OK, 1 360 cortadas | 0 | 0 |
+| **1 réplica, cola 5, 80/s 20 s** | 1 600 | **114 ms** | 271 ms | 1 179 OK, **421 × `503`** | 421, en **45 ms** de promedio | **0** |
+
+- **Con la cola llena, el cliente recibe `503 DEPENDENCY_UNAVAILABLE` en milisegundos** en lugar
+  de esperar 30 s, y el orquestador **no lo reintenta** (0 `reintentando ... motivo=HTTP 503`).
+- Con la cola de 100 por defecto, 1 réplica a 80/s tampoco llega a rechazar: extracción contesta
+  con p95 de 1,5 s (menos que los 5 s de espera) y la cola no se llena. Las 1 360 cortadas
+  vuelven a esperar en el orquestador.
+- **Hallazgo:** el WARNING de extracción (`code=DEPENDENCY_UNAVAILABLE status=503 message=...`)
+  **no incluye el `reason`** (`cola_llena` / `espera_agotada`); solo va en la respuesta. Y el
+  orquestador registra esos `503` como `ERROR`, aunque el contrato (1.4.0, `extraccion-texto`)
+  dice que el `503` por saturación "se registra en `WARNING`" por ser recuperable.
+
+### Cortocircuito con backpressure
+
+| Escenario | Promedio | Respuestas | `503` de extracción | `503` del circuito abierto | Reintentos |
+|---|---|---|---|---|---|
+| 3 réplicas, 60/s 30 s | 61 ms | 10 × 201, 1 790 × 409 | 0 | 0 | 0 |
+| 1 réplica, cola 5, 80/s 20 s | **13,0 s** | 855 OK, 745 × `503` | 233 | **512** | **1 223** (`motivo=HTTP 503`) |
+
+- **Con 3 réplicas el circuito no se abre**: no hay errores y los tiempos no cambian.
+- **Con backpressure, el circuito se abre y empeora todo.** La expresión
+  `ResponseCodeRatio(500, 600, 0, 600) > 0.30` cuenta los `503` del backpressure. Abierto,
+  Traefik responde `503 Service Unavailable` en texto plano, **sin el formato común ni
+  `details.reason`**. El orquestador no lo reconoce como backpressure y lo reintenta
+  (`RETRY_ATTEMPTS=2`, 0,5 s entre intentos) contra el mismo circuito abierto: el promedio pasa
+  de 114 ms a 13 s. Opciones para el grupo: excluir el `503` de la expresión del circuito
+  (`ResponseCodeRatio(500, 503, 0, 600)` + `ResponseCodeRatio(504, 600, 0, 600)`), o que el
+  orquestador no reintente un `503` que viene de un circuito abierto. Mientras tanto, **el
+  cortocircuito conviene dejarlo apagado** (ya es el valor por defecto).
+
 ## Seguridad de imágenes (Grype)
 
 ```bash
@@ -493,6 +602,27 @@ uv sync ...`), así no queda en la imagen final. Rama `fix/imagen-sin-uv` en cad
 Las cinco imágenes quedan con el mismo resultado: **0 Critical, 0 High con arreglo**, y las
 55 High son todas del sistema operativo Debian 13 sin arreglo publicado. Probado en el stack:
 humo de los cinco `/health` y `POST /pdf` por Traefik (`201` y `409` con el mismo PDF).
+
+### Extracción 1.2.0 y orquestador 1.0.5 (2026-10-21)
+
+Mismo script (`./scripts/grype.sh`), Grype 0.120.1 con la base de vulnerabilidades del día.
+Resumen completo en `seguridad/resumen.md`.
+
+| Imagen antes | Critical | High | Total | → | Imagen después | Critical | High | Total |
+|---|---|---|---|---|---|---|---|---|
+| `extraccion-texto:1.1.2` | 0 | 55 | 172 | → | `extraccion-texto:1.2.0` | 0 | 55 | 172 |
+| `orquestador:1.0.4` | 0 | 55 | 172 | → | `orquestador:1.0.5` | **1** | 55 | 173 |
+
+- **Extracción 1.2.0 queda igual**: sacar pypdf y usar PyMuPDF también en `/extraer` no
+  agrega vulnerabilidades (PyMuPDF 1.28.2: 0). Ninguna High ni Critical con arreglo.
+- **La Critical del orquestador es `certifi` 2026.7.22** (GHSA-6q48-6c7w-9gw2: incluye raíces
+  de emSign con claves intermedias comprometidas; arreglo en 2026.10.19, publicado el
+  2026-10-19). **No la trajo la 1.0.5**: el `uv.lock` tiene esa versión de `certifi` desde la
+  1.0.4; es un aviso nuevo de la base de Grype. Se arregla con
+  `uv lock --upgrade-package certifi` (solo cambia `uv.lock`; 84 tests en verde). Probado:
+  la imagen con `certifi` 2026.10.19 da **0 Critical**, 55 High, 172 en total. Queda para la
+  próxima versión del orquestador.
+- Validación y las dos persistencias no cambiaron: 0 Critical, 55 High del sistema operativo.
 
 Snyk queda para el final, con la cuenta de la facultad (es web).
 
