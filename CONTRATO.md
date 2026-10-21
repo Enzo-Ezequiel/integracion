@@ -2,7 +2,7 @@
 
 ```
 Contrato: microservicios-pdf
-Versión: 1.3.1
+Versión: 1.4.0
 Formato: JSON UTF-8
 Identificación: UUID
 Fechas: ISO-8601 UTC
@@ -13,6 +13,21 @@ Pydantic de cada servicio son su implementación. Cualquier cambio sube la versi
 en [Cambios](#cambios): compatible (minor) o `BREAKING CHANGE` (major).
 
 ## Cambios
+
+### 1.4.0 (2026-10-21) — compatible con 1.3.1
+
+`POST /extraer`, el endpoint que usa el orquestador, pasa a extraer como `/extract`: PyMuPDF en
+el pool de procesos y con el mismo backpressure. No cambian rutas, campos ni códigos de error:
+el `503 DEPENDENCY_UNAVAILABLE` ya estaba en la tabla común y el orquestador ya lo traducía.
+Imágenes `extraccion-texto:1.2.0` y `orquestador:1.0.5`.
+
+| # | Cambio | Sección |
+|---|---|---|
+| 1 | `/extraer` extrae con PyMuPDF (antes `pypdf`). Mismos campos; el `texto` puede diferir en saltos de línea o espacios. El `checksum` no cambia (es de los bytes). | [extraccion-texto](#extraccion-texto) |
+| 2 | `/extraer` comparte el pool y el backpressure de `/extract`: `503 DEPENDENCY_UNAVAILABLE` con `details.reason` y `Retry-After`. Las `EXTRACT_*` rigen para los dos endpoints. | [extraccion-texto](#extraccion-texto) |
+| 3 | Un PDF que se abre pero no tiene páginas (árbol de páginas roto) es `422 PDF_CORRUPTED`, igual que con `pypdf`. | [extraccion-texto](#extraccion-texto) |
+| 4 | El orquestador **no reintenta** el `503` por backpressure (`cola_llena`, `espera_agotada`): lo devuelve enseguida con el mismo `code` y `details`. Los demás `503` se siguen reintentando. | [orquestador](#orquestador) |
+| 5 | Despliegue: la espera máxima en la cola de extracción tiene que ser menor que el `REQUEST_TIMEOUT_SECONDS` del orquestador. | [Despliegue](#despliegue) |
 
 ### 1.3.1 (2026-10-07) — compatible con 1.3.0
 
@@ -223,25 +238,28 @@ a medias (cada alta es una sola escritura).
 
 ### `extraccion-texto`
 
-- **Hace:** recibir un PDF validado, extraer el texto de todas las páginas con `pypdf`, contar las
-  páginas y calcular el checksum SHA-256. *(1.3.0)* Convertir un PDF binario a Markdown
+- **Hace:** recibir un PDF validado, extraer el texto de todas las páginas, contar las páginas y
+  calcular el checksum SHA-256. *(1.4.0)* Extrae con PyMuPDF en un pool de procesos con
+  backpressure (antes `pypdf` en el threadpool de FastAPI). *(1.3.0)* Convertir un PDF binario a Markdown
   (`POST /extract`, TP de carga).
 - **No hace:** persistir, usar MongoDB ni Redis.
 - `POST /extraer` — `{"archivo_base64", "nombre"}` →
   `{"nombre", "texto", "checksum", "tamano_bytes", "paginas"}`.
-- Variables: *(1.2.0)* `LOG_LEVEL`; *(1.3.0)* las `EXTRACT_*` de `/extract`, opcionales.
+- Variables: *(1.2.0)* `LOG_LEVEL`; *(1.3.0)* las `EXTRACT_*`, opcionales (*1.4.0:* rigen para
+  `/extraer` y `/extract`, que comparten el pool).
 
 *(1.1.0)*
 
 | Caso | Respuesta |
 |---|---|
 | Base64 inválido, archivo vacío o sin la firma `%PDF` | `422 PDF_INVALID` |
-| `pypdf` no puede abrir, recorrer o extraer | `422 PDF_CORRUPTED` |
+| `pypdf` no puede abrir, recorrer o extraer. *(1.4.0)* PyMuPDF no puede abrirlo, o no tiene páginas | `422 PDF_CORRUPTED` |
+| *(1.4.0)* Cola llena o espera vencida (*backpressure*, igual que `/extract`) | `503 DEPENDENCY_UNAVAILABLE`, `details.reason` = `cola_llena` o `espera_agotada`, header `Retry-After: 1` |
 | PDF sin texto (por ejemplo, escaneado) | `200` con `"texto": ""`: es un PDF válido |
 | Tamaño | No se controla acá: lo hace `validacion-pdf`, y el orquestador siempre valida antes |
 
 - Header de respuesta `X-Extraction-Time-Ms`: milisegundos que tardó la extracción (decodificar,
-  pypdf y checksum). Informativo, para medir la extracción aparte del total en las pruebas de carga.
+  pypdf y checksum; *1.4.0:* esperar un worker, PyMuPDF y checksum). Informativo, para medir la extracción aparte del total en las pruebas de carga.
 
 *(1.3.0)* **`POST /extract`** — TP de carga y estrés. Fuera del flujo del orquestador.
 
@@ -261,7 +279,9 @@ a medias (cada alta es una sola escritura).
 | Cola llena o espera vencida (*backpressure*) | `503 DEPENDENCY_UNAVAILABLE`, `details.reason` = `cola_llena` o `espera_agotada`, header `Retry-After: 1` |
 
 El `503` por saturación sigue el mismo patrón que el `lock_timeout` de actualizaciones: no se
-procesó nada y se puede reintentar. Se registra en `WARNING`.
+procesó nada y el cliente puede volver a intentar después de `Retry-After`. Se registra en
+`WARNING`. *(1.4.0)* El orquestador no lo reintenta dentro de la misma request (ver
+[orquestador](#orquestador)).
 
 ### `persistencia-actualizaciones`
 
@@ -310,7 +330,7 @@ procesó nada y se puede reintentar. Se registra en `WARNING`.
 
 - **Hace:** recibir la solicitud pública; llamar a validación, extracción y persistencia; propagar
   `X-Correlation-ID`; aplicar timeout y retry; ejecutar la compensación SAGA.
-- **No hace:** usar MongoDB, Redis ni `pypdf`.
+- **No hace:** usar MongoDB, Redis ni librerías de PDF (`pypdf`, PyMuPDF).
 - `POST /pdf` — `{"archivo_base64", "nombre"}` → `201` con el documento de persistencia.
 - Variables: `VALIDACION_URL`, `EXTRACCION_URL`, `PERSISTENCIA_CONSULTAS_URL`,
   `PERSISTENCIA_ACTUALIZACIONES_URL`, `REQUEST_TIMEOUT_SECONDS`, `RETRY_ATTEMPTS`,
@@ -321,6 +341,10 @@ procesó nada y se puede reintentar. Se registra en `WARNING`.
 - Los errores de las dependencias se devuelven con su `code` y el HTTP de la tabla común.
 - Reintenta (`RETRY_ATTEMPTS`) solo las llamadas idempotentes: validar, extraer, consultar y
   borrar. El alta en persistencia **no** se reintenta.
+- *(1.4.0)* Un `503` con `details.reason` `cola_llena` o `espera_agotada` (backpressure de
+  extracción) **no se reintenta**: reintentar le suma carga a un servicio que ya rechaza por
+  falta de lugar. Se devuelve al cliente como `503 DEPENDENCY_UNAVAILABLE` con el mismo
+  `details`. Pasa antes del alta, así que no hay nada que compensar.
 - **SAGA.** Se compensa solo cuando el resultado del alta es incierto: persistencia no respondió
   (timeout, conexión o respuesta fuera del contrato). La compensación busca el checksum en
   `persistencia-consultas` y, si el documento se creó durante esta request (`created_at` posterior
@@ -374,6 +398,10 @@ procesó nada y se puede reintentar. Se registra en `WARNING`.
   `microservicios-pdf.balanceo=interno`. El de la cátedra no ve a extracción (no lleva
   `traefik.enable=true`), así que extracción sigue siendo interna: no se alcanza desde el host.
 - `EXTRACCION_URL` apunta a `traefik-interno`; el código del orquestador no cambia.
+- *(1.4.0)* `EXTRACT_QUEUE_TIMEOUT_SECONDS` de extracción **menor** que
+  `REQUEST_TIMEOUT_SECONDS` del orquestador. Si no, el orquestador corta por timeout una
+  request que sigue en la cola de extracción y la reintenta, y la réplica procesa las dos. La
+  integración usa `5` s de espera contra `10` s de timeout.
 - **Cortocircuito** (*circuit breaker*): lo aplica Traefik con su middleware `circuitBreaker`,
   no se programa. Se mide con y sin él; la expresión y los resultados están en el README de
   integración. Con el circuito abierto Traefik responde `503`, que el orquestador ya traduce a
