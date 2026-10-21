@@ -11,9 +11,9 @@ profesor](#decisiones-y-respuestas-del-profesor-2026-10-07).
 
 | Servicio | Repo | Imagen | Público |
 |---|---|---|---|
-| orquestador | [vale36/Orquestador](https://github.com/vale36/Orquestador) | `orquestador:1.0.5` | sí, por Traefik: `https://pdf.universidad.localhost` |
+| orquestador | [vale36/Orquestador](https://github.com/vale36/Orquestador) | `orquestador:1.0.6` | sí, por Traefik: `https://pdf.universidad.localhost` |
 | validacion-pdf | [valentinapenasco/validacion-pdf](https://github.com/valentinapenasco/validacion-pdf) | `validacion-pdf:1.0.4` | no |
-| extraccion-texto | [NicolasPerez735/Extraccion-de-texto-pdf-](https://github.com/NicolasPerez735/Extraccion-de-texto-pdf-) | `extraccion-texto:1.2.0` (3 réplicas) | no; la balancea `traefik-interno` |
+| extraccion-texto | [NicolasPerez735/Extraccion-de-texto-pdf-](https://github.com/NicolasPerez735/Extraccion-de-texto-pdf-) | `extraccion-texto:1.2.1` (3 réplicas) | no; la balancea `traefik-interno` |
 | traefik-interno | — | `traefik:v3.6` | no (sin puertos publicados) |
 | persistencia-actualizaciones | [matiasscanoo/persistencia-actualizaciones](https://github.com/matiasscanoo/persistencia-actualizaciones) | `persistencia-actualizaciones:1.0.4` | no |
 | persistencia-consultas | [ManuelGomez33/persistencia-consultas](https://github.com/ManuelGomez33/persistencia-consultas) | `persistencia-consultas:1.0.4` | no |
@@ -96,16 +96,17 @@ Los pasos, a mano:
 
    ```bash
    docker build -t validacion-pdf:1.0.4 validacion-pdf
-   docker build -t extraccion-texto:1.2.0 Extraccion-de-texto-pdf-
+   docker build -t extraccion-texto:1.2.1 Extraccion-de-texto-pdf-
    docker build -t persistencia-actualizaciones:1.0.4 persistencia-actualizaciones
    docker build -t persistencia-consultas:1.0.4 persistencia-consultas
-   docker build -t orquestador:1.0.5 Orquestador
+   docker build -t orquestador:1.0.6 Orquestador
    ```
 
    Estas versiones implementan el contrato 1.4.0 (Swagger muestra la misma versión que el tag
    de la imagen; `/extraer` usa PyMuPDF con backpressure y el orquestador no reintenta ese
-   `503`) y salen de `main` de cada repo una vez mergeadas `feat/extraer-rapido`
-   (extracción) y `feat/sin-reintento-backpressure` (orquestador). `scripts/levantar.sh` muestra en qué rama está cada repo.
+   `503`) y salen de `main` de cada repo una vez mergeadas `fix/log-motivo-saturacion`
+   (extracción 1.2.1: el motivo del `503` en el log) y `fix/nivel-log-y-certifi`
+   (orquestador 1.0.6: `certifi` sin la Critical y errores del contrato en `WARNING`). `scripts/levantar.sh` muestra en qué rama está cada repo.
 
 2. Crear la configuración a partir de los ejemplos (no hay secretos; son nombres de la red
    interna):
