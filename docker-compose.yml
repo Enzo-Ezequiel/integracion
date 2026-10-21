@@ -72,6 +72,12 @@ services:
       - "--entrypoints.web.address=:80"
       - "--ping=true"
       - "--log.level=INFO"
+      # Access log en JSON a stdout, sin headers salvo X-Correlation-Id: permite seguir el
+      # tramo orquestador → traefik-interno → réplica de cada request (12-Factor XI).
+      - "--accesslog=true"
+      - "--accesslog.format=json"
+      - "--accesslog.fields.headers.defaultmode=drop"
+      - "--accesslog.fields.headers.names.X-Correlation-Id=keep"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik-interno/dinamico.yml:/etc/traefik/dinamico.yml:ro
