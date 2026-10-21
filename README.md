@@ -138,7 +138,7 @@ Un archivo por servicio en `env/`, cada uno con su `.env.example` versionado:
 | Archivo | Variables |
 |---|---|
 | `validacion.env` | `PDF_MAX_SIZE_MB`, `APP_NAME`, `APP_VERSION` |
-| `extraccion.env` | `LOG_LEVEL` |
+| `extraccion.env` | `LOG_LEVEL`, `EXTRACT_QUEUE_TIMEOUT_SECONDS` (`5`: menor que el timeout de 10 s del orquestador, contrato 1.4.0) |
 | `actualizaciones.env` | `MONGO_URI`, `MONGO_DATABASE`, `MONGO_COLLECTION`, `REDIS_URL`, `LOCK_TIMEOUT_SECONDS` |
 | `consultas.env` | `MONGO_URI`, `MONGO_DATABASE`, `MONGO_COLLECTION`, `REDIS_URL`, `REDIS_TTL_SECONDS` |
 | `orquestador.env` | `VALIDACION_URL`, `EXTRACCION_URL`, `PERSISTENCIA_CONSULTAS_URL`, `PERSISTENCIA_ACTUALIZACIONES_URL`, `REQUEST_TIMEOUT_SECONDS`, `RETRY_ATTEMPTS`, `RETRY_DELAY_SECONDS` |

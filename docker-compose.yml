@@ -40,8 +40,9 @@ services:
     image: extraccion-texto:${EXTRACCION_VERSION:?definir en .env}
     env_file: ./env/extraccion.env
     networks: [redutn]
-    # pypdf corre en el threadpool y compite por el GIL: un proceso no pasa de ~8 PDF/s.
-    # Con 3 réplicas se llega a ~41 PDF/s (ver README, "Prueba de carga").
+    # Desde la 1.2.0 cada réplica extrae con PyMuPDF en un pool de procesos con backpressure
+    # (contrato 1.4.0). Con pypdf un proceso no pasaba de ~8 PDF/s y 3 réplicas llegaban a
+    # ~41 PDF/s (ver README, "Prueba de carga").
     deploy:
       replicas: 3
     # Sin traefik.enable: el Traefik de la cátedra no la publica. La label de balanceo la
