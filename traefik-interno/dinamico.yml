@@ -4,6 +4,11 @@ http:
     # Una réplica recién detenida sigue en la lista de Traefik hasta que llega el evento
     # de Docker; sin esto, conectar a su IP espera el timeout del orquestador (10 s).
     # Con 1 s el orquestador reintenta enseguida contra otra réplica.
+    #
+    # idleConnTimeout menor que el keep-alive de uvicorn en las réplicas (5 s): si Traefik
+    # reutiliza una conexión justo cuando uvicorn la cierra, la request se pierde y el
+    # orquestador espera sus 10 s. Pasaba 3 veces cada 10 000 requests; con 4 s, ninguna.
     extraccion:
       forwardingTimeouts:
         dialTimeout: 1s
+        idleConnTimeout: 4s
