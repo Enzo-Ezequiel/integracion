@@ -460,8 +460,35 @@ promedio con 3 réplicas.
   `POST /extraer` del orquestador **no llegó a ninguna réplica** (no hay log de extracción con
   ese `correlation_id`); vencieron los 10 s de `REQUEST_TIMEOUT_SECONDS` y el reintento extrajo
   en 17–68 ms. Se perdieron dentro de `redutn`, entre el orquestador y las réplicas, no en el
-  reenvío de puertos del host. `traefik-interno` no registró errores y no tiene access log, así
-  que no se sabe en qué tramo. Son 3 de 10 020 (0,03 %) y el reintento las cubre.
+  reenvío de puertos del host. Son 3 de 10 020 (0,03 %) y el reintento las cubre.
+  **Ubicadas y arregladas**, ver [Requests perdidas hacia extracción](#requests-perdidas-hacia-extracción).
+
+### Requests perdidas hacia extracción
+
+Para ubicarlas se activó el **access log de `traefik-interno`** (JSON a `stdout`, sin headers
+salvo `X-Correlation-Id`; queda activado en `docker-compose.yml`) y se repitió el escenario del
+profesor (2026-10-21, `extraccion-texto:1.2.1`, `orquestador:1.0.6`):
+
+| Corrida (vegeta 30/s) | `idleConnTimeout` | Peticiones | Reintentos del orquestador | `499` en `traefik-interno` | Máximo |
+|---|---|---|---|---|---|
+| 334 s, antes del access log | 90 s (default) | 10 020 | 3 × `ReadTimeout` | — | 10,7 s |
+| 334 s, con access log | 90 s (default) | 10 020 | 3 × `ReadTimeout` | 3 | 10,6 s |
+| **334 s** | **4 s** | 10 020 | **0** | **0** | **285 ms** |
+| **150 s** (confirmación) | **4 s** | 4 500 | **0** | **0** | **262 ms** |
+
+- **Dónde se perdían:** las 3 llegaron a `traefik-interno`, que las mandó a una réplica (una
+  distinta cada vez); la réplica no respondió y a los 10 s el orquestador cortó (`499`, 10 000 ms
+  en el access log). La aplicación de la réplica **no registró nada** de ese primer intento: la
+  request salió de Traefik y no llegó a uvicorn. El reintento fue a otra réplica (o a la misma)
+  y respondió en 19–45 ms. En las dos corridas pasó en el primer minuto (a los 23–64 s).
+- **Causa:** carrera de keep-alive entre proxy y backend. uvicorn cierra las conexiones ociosas
+  a los 5 s (`--timeout-keep-alive` por defecto) y Traefik las guarda para reutilizarlas hasta
+  90 s (`idleConnTimeout` por defecto). Si Traefik reutiliza una conexión justo cuando uvicorn la
+  cierra, la request se pierde; con la red de Docker Desktop no llega el error, así que queda
+  colgada hasta el timeout del orquestador.
+- **Arreglo:** `idleConnTimeout: 4s` en `traefik-interno/dinamico.yml`, menor que los 5 s de
+  uvicorn: Traefik descarta la conexión antes de que uvicorn la cierre. Con eso, **0 perdidas
+  en 14 520 requests** (antes, 3 en cada corrida de 10 020). El promedio no cambia (71–75 ms).
 
 ### Dónde está ahora el techo
 
@@ -503,7 +530,10 @@ Como por el orquestador no se llega a saturar extracción, el mecanismo se prob�
   dice que el `503` por saturación "se registra en `WARNING`" por ser recuperable.
   **Arreglado** en `extraccion-texto:1.2.1` (la línea termina en `reason=<motivo>`) y en
   `orquestador:1.0.6` (los errores del contrato van en `WARNING`; `ERROR` queda para lo no
-  previsto). Falta verlo en el stack levantado.
+  previsto). **Verificado en el stack** (2026-10-21, mismo backpressure forzado: 1 réplica,
+  cola 5, 80/s × 20 s): extracción registró los 517 rechazos en `WARNING` terminando en
+  `reason=cola_llena`; el orquestador, los 517 `503` y los 1 073 `409` en `WARNING`, con
+  **0 líneas `ERROR`** y 0 reintentos.
 
 ### Cortocircuito con backpressure
 
@@ -625,7 +655,11 @@ Resumen completo en `seguridad/resumen.md`.
   1.0.4; es un aviso nuevo de la base de Grype. Se arregla con
   `uv lock --upgrade-package certifi` (solo cambia `uv.lock`; 84 tests en verde). Probado:
   la imagen con `certifi` 2026.10.19 da **0 Critical**, 55 High, 172 en total. Va en
-  `orquestador:1.0.6`; falta correr Grype sobre esa imagen.
+  `orquestador:1.0.6`. **Grype sobre `orquestador:1.0.6`** (2026-10-21): **0 Critical**, 55 High
+  (todas del sistema operativo), 172 en total, ninguna High ni Critical con arreglo; `certifi`
+  ya no aparece.
+- **`extraccion-texto:1.2.1`** (2026-10-21): igual que la 1.2.0, 0 Critical, 55 High, 172 en
+  total. Las cinco imágenes del `.env` quedan con 0 Critical (`seguridad/resumen.md`).
 - Validación y las dos persistencias no cambiaron: 0 Critical, 55 High del sistema operativo.
 
 Snyk queda para el final, con la cuenta de la facultad (es web).
