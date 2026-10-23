@@ -77,6 +77,10 @@ mkcert -cert-file certs/cert.pem -key-file certs/key.pem "universidad.localhost"
 
 ## Levantar todo con un comando
 
+> **¿Primera vez?** El README del [Orquestador](https://github.com/vale36/Orquestador)
+> tiene una guía paso a paso, sin conocimientos previos: "Cómo ejecutar todo el sistema"
+> (herramientas, carpeta con los seis repos, este script, cómo probarlo y problemas comunes).
+
 ```bash
 ./scripts/levantar.sh            # verifica, construye, levanta y hace el humo
 ./scripts/levantar.sh --tests    # además corre la suite de los cinco repos
@@ -104,9 +108,8 @@ Los pasos, a mano:
 
    Estas versiones implementan el contrato 1.4.0 (Swagger muestra la misma versión que el tag
    de la imagen; `/extraer` usa PyMuPDF con backpressure y el orquestador no reintenta ese
-   `503`) y salen de `main` de cada repo una vez mergeadas `fix/log-motivo-saturacion`
-   (extracción 1.2.1: el motivo del `503` en el log) y `fix/nivel-log-y-certifi`
-   (orquestador 1.0.6: `certifi` sin la Critical y errores del contrato en `WARNING`). `scripts/levantar.sh` muestra en qué rama está cada repo.
+   `503`) y salen de `main` de cada repo (2026-10-21: extracción #22, orquestador #28).
+   `scripts/levantar.sh` muestra en qué rama está cada repo.
 
 2. Crear la configuración a partir de los ejemplos (no hay secretos; son nombres de la red
    interna):
@@ -811,8 +814,17 @@ que el `/health` del servicio responda.
   acotada por el TTL.
 - **Orquestador fuera de Traefik al saturarse.** Con más carga que capacidad, su healthcheck
   (timeout 2 s, 3 reintentos) falla, Docker lo marca `unhealthy` y Traefik lo saca (`404`).
-  Se podría dar más margen al healthcheck; la solución real es no superar ~35/s o sumar
-  réplicas.
+  Pasó con extracción 1.0.3 por encima de ~35/s; con extracción 1.2.x la capacidad subió a
+  ~90 PDF/s (ver "Prueba de carga con extracción 1.2.0") y a 60/s no se repitió.
+- **El orquestador es ahora el techo** (~90 PDF/s, un proceso al ~105 % de CPU con las réplicas
+  de extracción al ~20 %). Opciones: réplicas del orquestador detrás del Traefik de la cátedra
+  o `uvicorn --workers`. Pendiente de decidir con el grupo.
+- **Cortocircuito con backpressure.** El circuito cuenta los `503` de extracción saturada como
+  fallas, se abre y Traefik responde un `503` sin el formato común, que el orquestador sí
+  reintenta (ver "Cortocircuito con backpressure"). Por eso queda apagado (es el default).
+  Opciones: sacar los `503` de la expresión del circuito, o no reintentar el `503` de Traefik.
+- **Requests perdidas hacia extracción por keep-alive:** **resuelto** (2026-10-21) con
+  `idleConnTimeout: 4s` en `traefik-interno` (ver "Requests perdidas hacia extracción").
 - **Extracciones perdidas con `SIGKILL`.** Si una réplica muere sin `SIGTERM`, sus requests en
   curso se recuperan por timeout (10 s) y reintento.
 - **Vulnerabilidades de las imágenes:** **resuelto** lo que tenía arreglo (ver Grype). Quedan
