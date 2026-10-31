@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Levanta la integración completa desde un clon limpio: verifica herramientas, crea la
-# red y los .env, construye las imágenes con el tag del .env, levanta el stack y hace el
-# humo. Con --tests corre además la suite de cada microservicio.
+# Levanta la segunda capa del sistema, los cinco microservicios, sobre la infraestructura
+# (primera capa) ya levantada: verifica herramientas y que la infraestructura esté sana,
+# crea los .env, construye las imágenes con el tag del .env, levanta los microservicios y
+# hace el humo. Con --tests corre además la suite de cada microservicio.
 #
 # Uso (desde integracion/): ./scripts/levantar.sh [--tests] [--sin-build]
-# Requiere los cinco repos clonados al lado de integracion/ y el Traefik de dockers/traefik.
+# Requiere los cinco repos clonados al lado de integracion/ y la infraestructura levantada
+# antes desde ../dockers con `docker compose up -d --wait`.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -47,9 +49,20 @@ for linea in "${SERVICIOS[@]}"; do
   echo "$repo: rama $(git -C "$RAIZ/$repo" branch --show-current)"
 done
 
-paso "Red redutn"
-docker network inspect redutn >/dev/null 2>&1 || docker network create redutn
-echo "ok"
+paso "Infraestructura (primera capa)"
+docker network inspect redutn >/dev/null 2>&1 ||
+  falla "no existe la red redutn: levantar primero ../dockers (ver README)"
+for contenedor in consul mongodb redis; do
+  estado=$(docker inspect -f '{{.State.Health.Status}}' "$contenedor" 2>/dev/null || true)
+  [ "$estado" = healthy ] || falla "$contenedor no está sano: en ../dockers, docker compose up -d --wait"
+done
+[ "$(docker inspect -f '{{.State.Running}}' traefik 2>/dev/null)" = true ] ||
+  falla "Traefik no corre: en ../dockers, docker compose up -d --wait"
+for token in microservices orchestrator; do
+  [ -s "$RAIZ/dockers/consul/generated/$token.token" ] ||
+    falla "falta el token $token (lo crea el bootstrap de ../dockers)"
+done
+echo "Consul, Traefik, MongoDB y Redis: ok"
 
 paso "Configuración (.env desde los .env.example que falten)"
 [ -f .env ] || cp .env.example .env
@@ -70,14 +83,7 @@ if [ "$CONSTRUIR" = si ]; then
   done
 fi
 
-paso "Traefik"
-if [ "$(docker inspect -f '{{.State.Running}}' traefik 2>/dev/null)" != true ]; then
-  [ -d "$RAIZ/dockers/traefik" ] || falla "Traefik no corre y no está $RAIZ/dockers/traefik"
-  docker compose -f "$RAIZ/dockers/traefik/docker-compose.yml" up -d
-fi
-echo "ok"
-
-paso "Stack"
+paso "Microservicios (segunda capa)"
 docker compose up -d --wait
 docker compose ps --format '{{.Name}}  {{.Status}}'
 

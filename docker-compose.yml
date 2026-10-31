@@ -1,14 +1,22 @@
-# Integración de los cinco microservicios del contrato microservicios-pdf.
-# Requiere la red externa: docker network create redutn
+# Segunda capa: los cinco microservicios del contrato microservicios-pdf.
+#
+# Va encima de la primera capa, la infraestructura compartida del repo dockers (Consul,
+# Traefik, MongoDB y Redis), que se levanta antes con dockers/levantar.ps1. Todo se
+# conecta por la red externa redutn. Cada servicio se registra en Consul con el token de
+# microservicios y el orquestador descubre las instancias sanas con su propio token de
+# solo lectura; los dos llegan como Docker secret desde ../dockers/consul/generated.
 name: integracion-pdf
 
 services:
   orquestador:
     image: orquestador:${ORQUESTADOR_VERSION:?definir en .env}
     env_file: ./env/orquestador.env
+    secrets:
+      - source: consul_orchestrator_token
+        target: /run/secrets/consul_orchestrator_token
     networks: [redutn]
-    # Único servicio público, a través del Traefik del equipo (dockers/traefik). El resto
-    # no lleva labels: con exposedByDefault=false queda solo en la red interna.
+    # Único servicio público, por el Traefik de la infraestructura. Los demás no llevan
+    # labels ni etiquetas de Traefik en Consul: quedan solo en la red interna.
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.orquestador.rule=Host(`${ORQUESTADOR_HOST:?definir en .env}`)"
@@ -20,8 +28,6 @@ services:
         condition: service_healthy
       extraccion-texto:
         condition: service_healthy
-      traefik-interno:
-        condition: service_healthy
       persistencia-actualizaciones:
         condition: service_healthy
       persistencia-consultas:
@@ -32,6 +38,7 @@ services:
   validacion-pdf:
     image: validacion-pdf:${VALIDACION_VERSION:?definir en .env}
     env_file: ./env/validacion.env
+    secrets: [consul_microservices_token]
     networks: [redutn]
     stop_grace_period: 40s
     restart: unless-stopped
@@ -39,111 +46,42 @@ services:
   extraccion-texto:
     image: extraccion-texto:${EXTRACCION_VERSION:?definir en .env}
     env_file: ./env/extraccion.env
+    secrets: [consul_microservices_token]
     networks: [redutn]
-    # Desde la 1.2.0 cada réplica extrae con PyMuPDF en un pool de procesos con backpressure
-    # (contrato 1.4.0). Con pypdf un proceso no pasaba de ~8 PDF/s y 3 réplicas llegaban a
-    # ~41 PDF/s (ver README, "Prueba de carga").
+    # Cada réplica se registra en Consul con su propia IP (extraccion.env no fija
+    # CONSUL_SERVICE_ADDRESS) y su propio health check. El orquestador reparte entre las
+    # instancias sanas y, si una falla, el reintento va a la siguiente.
     deploy:
       replicas: 3
-    # Sin traefik.enable: el Traefik de la cátedra no la publica. La label de balanceo la
-    # descubre solo traefik-interno, que reparte por request entre las réplicas.
-    labels:
-      - "microservicios-pdf.balanceo=interno"
-      - "traefik.http.routers.extraccion.entrypoints=web"
-      - "traefik.http.routers.extraccion.rule=PathPrefix(`/`)"
-      - "traefik.http.services.extraccion.loadbalancer.server.port=8000"
-      - "traefik.http.services.extraccion.loadbalancer.serverstransport=extraccion@file"
-      # Cortocircuito: se define siempre y se aplica con docker-compose.cortocircuito.yml.
-      - "traefik.http.middlewares.extraccion-cortocircuito.circuitbreaker.expression=NetworkErrorRatio() > 0.30 || ResponseCodeRatio(500, 600, 0, 600) > 0.30"
     stop_grace_period: 40s
-    restart: unless-stopped
-
-  # Balanceador interno de extracción (contrato 1.2.0, "Despliegue"). Separado del Traefik
-  # de la cátedra, que fuerza HTTPS en todo: este habla HTTP plano dentro de redutn, no
-  # publica puertos y solo descubre contenedores con microservicios-pdf.balanceo=interno.
-  traefik-interno:
-    image: traefik:v3.6
-    command:
-      - "--providers.docker=true"
-      - "--providers.docker.exposedByDefault=true"
-      - "--providers.docker.constraints=Label(`microservicios-pdf.balanceo`,`interno`)"
-      - "--providers.docker.network=redutn"
-      - "--providers.file.filename=/etc/traefik/dinamico.yml"
-      - "--entrypoints.web.address=:80"
-      - "--ping=true"
-      - "--log.level=INFO"
-      # Access log en JSON a stdout, sin headers salvo X-Correlation-Id: permite seguir el
-      # tramo orquestador → traefik-interno → réplica de cada request (12-Factor XI).
-      - "--accesslog=true"
-      - "--accesslog.format=json"
-      - "--accesslog.fields.headers.defaultmode=drop"
-      - "--accesslog.fields.headers.names.X-Correlation-Id=keep"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./traefik-interno/dinamico.yml:/etc/traefik/dinamico.yml:ro
-    security_opt:
-      - no-new-privileges:true
-    networks: [redutn]
-    healthcheck:
-      test: ["CMD", "traefik", "healthcheck", "--ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
     restart: unless-stopped
 
   persistencia-actualizaciones:
     image: persistencia-actualizaciones:${ACTUALIZACIONES_VERSION:?definir en .env}
     env_file: ./env/actualizaciones.env
+    secrets: [consul_microservices_token]
     networks: [redutn]
-    # No arranca si MongoDB no responde (decisión del servicio): espera el healthcheck
-    # y, si MongoDB se cae después, Docker lo reinicia.
-    depends_on:
-      mongodb:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+    # No arranca si MongoDB no responde (decisión del servicio): si la infraestructura
+    # todavía no está lista, Docker lo reinicia hasta que lo esté.
     stop_grace_period: 40s
     restart: unless-stopped
 
   persistencia-consultas:
     image: persistencia-consultas:${CONSULTAS_VERSION:?definir en .env}
     env_file: ./env/consultas.env
+    secrets: [consul_microservices_token]
     networks: [redutn]
-    depends_on:
-      mongodb:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
     stop_grace_period: 40s
     restart: unless-stopped
-
-  # MongoDB y Redis no publican puertos: Traefik usa 27017 y 6379 como entrypoints TCP.
-  mongodb:
-    image: mongo:7.0
-    volumes:
-      - mongo_data:/data/db
-    networks: [redutn]
-    healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  redis:
-    image: redis:7
-    # Solo caché: sin snapshot ni AOF. Si Redis se reinicia arranca vacío, en vez de
-    # recuperar un snapshot con datos que persistencia-actualizaciones ya invalidó.
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
-    networks: [redutn]
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
 networks:
   redutn:
     external: true
 
-volumes:
-  mongo_data:
+# Archivos generados por dockers/levantar.ps1 (ignorados por Git en ese repo). El valor
+# nunca aparece en este archivo ni en los logs.
+secrets:
+  consul_microservices_token:
+    file: ../dockers/consul/generated/microservices.token
+  consul_orchestrator_token:
+    file: ../dockers/consul/generated/orchestrator.token

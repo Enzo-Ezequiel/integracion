@@ -2,7 +2,7 @@
 
 ```
 Contrato: microservicios-pdf
-Versión: 1.4.0
+Versión: 1.5.0
 Formato: JSON UTF-8
 Identificación: UUID
 Fechas: ISO-8601 UTC
@@ -13,6 +13,22 @@ Pydantic de cada servicio son su implementación. Cualquier cambio sube la versi
 en [Cambios](#cambios): compatible (minor) o `BREAKING CHANGE` (major).
 
 ## Cambios
+
+### 1.5.0 (2026-10-30) — compatible con 1.4.0
+
+Descubrimiento de servicios con Consul (etapa 5) y despliegue en dos capas, por indicación del
+profesor: primero la infraestructura, después los microservicios. No cambian rutas, campos ni
+códigos de error. Las variables nuevas son opcionales: con `CONSUL_ENABLED=false` todo funciona
+como en la 1.4.0. Imágenes `validacion-pdf:1.0.5`, `extraccion-texto:1.2.2`,
+`persistencia-actualizaciones:1.0.5`, `persistencia-consultas:1.0.5` y `orquestador:1.0.7`.
+
+| # | Cambio | Sección |
+|---|---|---|
+| 1 | Los cuatro servicios internos se registran en Consul al arrancar (health check HTTP sobre `/health`) y se desregistran al apagarse. Nombres en Consul: `validacion-pdf`, `extraccion`, `persistencia-actualizaciones`, `persistencia-consultas`. | [Consul](#consul) |
+| 2 | El orquestador descubre las instancias sanas por Consul en lugar de URLs fijas; sin instancias sanas o sin Consul responde `503 DEPENDENCY_UNAVAILABLE`. | [orquestador](#orquestador), [Consul](#consul) |
+| 3 | Variables opcionales `CONSUL_ENABLED`, `CONSUL_HTTP_ADDR`, `CONSUL_HTTP_TOKEN_FILE`, `CONSUL_SERVICE_ADDRESS`, `CONSUL_SERVICE_PORT` y, en el orquestador, `CONSUL_FALLBACK_ENABLED`. Los tokens se leen de un archivo (Docker secret), nunca de una variable. | [Consul](#consul) |
+| 4 | Los servicios internos se registran **sin** etiquetas `traefik.*`: solo el orquestador es público. | [Despliegue](#despliegue) |
+| 5 | Despliegue en dos composes: infraestructura (Consul, Traefik, MongoDB, Redis) y microservicios. Una sola MongoDB y un solo Redis para las dos persistencias. `traefik-interno` y su cortocircuito salen del camino: el reparto entre réplicas lo hace el orquestador con Consul. | [Despliegue](#despliegue) |
 
 ### 1.4.0 (2026-10-21) — compatible con 1.3.1
 
@@ -334,7 +350,9 @@ procesó nada y el cliente puede volver a intentar después de `Retry-After`. Se
 - `POST /pdf` — `{"archivo_base64", "nombre"}` → `201` con el documento de persistencia.
 - Variables: `VALIDACION_URL`, `EXTRACCION_URL`, `PERSISTENCIA_CONSULTAS_URL`,
   `PERSISTENCIA_ACTUALIZACIONES_URL`, `REQUEST_TIMEOUT_SECONDS`, `RETRY_ATTEMPTS`,
-  `RETRY_DELAY_SECONDS`, *(1.2.0)* `LOG_LEVEL`.
+  `RETRY_DELAY_SECONDS`, *(1.2.0)* `LOG_LEVEL`; *(1.5.0)* `CONSUL_ENABLED`, `CONSUL_HTTP_ADDR`,
+  `CONSUL_HTTP_TOKEN_FILE`, `CONSUL_FALLBACK_ENABLED`. Con Consul las cuatro `*_URL` son opcionales
+  (solo se usan como fallback explícito).
 
 *(1.1.0)*
 
@@ -352,6 +370,23 @@ procesó nada y el cliente puede volver a intentar después de `Retry-After`. Se
   se compensa ante un error del contrato (`400`, `409`, `422`, `503 lock_timeout`): no se guardó
   nada, y ante un `409` borrar por checksum eliminaría un documento que ya existía.
 - La respuesta `201` reenvía `X-Extraction-Time-Ms` si extracción lo informó.
+
+## Consul
+
+*(1.5.0)*
+
+- Cada servicio interno se registra en el agente con ID `<nombre>-<hostname>` (único por
+  réplica), su dirección y puerto (`CONSUL_SERVICE_ADDRESS`, `CONSUL_SERVICE_PORT`) y un health
+  check HTTP a `http://<dirección>:<puerto>/health` cada 10 s (timeout 3 s). Si no se define
+  `CONSUL_SERVICE_ADDRESS`, la instancia usa su IP: así lo hacen las réplicas de extracción,
+  para que Consul controle la salud de cada una por separado.
+- Registro y desregistro usan el token de microservicios; el orquestador consulta
+  `/v1/health/service/<nombre>?passing=true` con su token de solo lectura. Los tokens llegan
+  como Docker secret (`CONSUL_HTTP_TOKEN_FILE`).
+- El orquestador reparte entre las instancias sanas (round robin por llamada). Si una falla,
+  el reintento de las llamadas idempotentes va a la siguiente.
+- Consul corre con ACL `default_policy = "deny"` y sus datos en un volumen: al reiniciarse
+  conserva los registros.
 
 ## MongoDB
 
@@ -408,3 +443,13 @@ procesó nada y el cliente puede volver a intentar después de `Retry-After`. Se
   `503 DEPENDENCY_UNAVAILABLE`.
 - `depends_on` con `condition: service_healthy` espera el `/health` de cada servicio (no solo
   que el contenedor arranque), así que no hay carrera con un puerto todavía cerrado.
+
+*(1.5.0)* **Dos capas y Consul.**
+
+- Primero la infraestructura (`dockers/docker-compose.yml`: Consul con su bootstrap de ACL,
+  Traefik, MongoDB y Redis), después los microservicios (`integracion/docker-compose.yml`).
+- Una sola MongoDB y un solo Redis, de la infraestructura, para las dos persistencias.
+- El reparto entre réplicas de extracción lo hace el orquestador con Consul: `traefik-interno`
+  y su cortocircuito ya no están (los puntos de la 1.2.0 sobre ellos quedan como historia).
+  `EXTRACCION_URL` solo se usa con `CONSUL_ENABLED=false`.
+- Los internos no llevan etiquetas `traefik.*` en Consul ni labels en Docker.

@@ -1,157 +1,140 @@
 # integracion — microservicios-pdf
 
-Levanta juntos los cinco microservicios del contrato `microservicios-pdf` v1.4.0 con
-MongoDB y Redis reales, y documenta las pruebas de integración.
+Levanta juntos los cinco microservicios del contrato `microservicios-pdf` v1.5.0 con
+MongoDB, Redis y Consul reales, y documenta las pruebas de integración. El contrato
+completo, con su registro de cambios, está en [CONTRATO.md](CONTRATO.md).
 
-El contrato completo, con su registro de cambios, está en [CONTRATO.md](CONTRATO.md). La 1.2.0
-(compatible) incorpora lo que pidió el profesor el 2026-10-07: `/health` con dependencias, logs
-(12-Factor XI), finalización segura (12-Factor IX) y balanceo de extracción por Traefik. Qué
-está implementado y qué falta se ve en [Decisiones y respuestas del
-profesor](#decisiones-y-respuestas-del-profesor-2026-10-07).
+## El sistema son dos docker compose
+
+Por indicación del profesor, primero se levanta la infraestructura y después los
+microservicios:
+
+| Capa | Compose | Qué levanta |
+|---|---|---|
+| 1. Infraestructura | `dockers/docker-compose.yml` ([vale36/infraestructura](https://github.com/vale36/infraestructura)) | Consul con ACL (y su bootstrap de tokens), Traefik, MongoDB y Redis |
+| 2. Microservicios | `docker-compose.yml` de este repo | Los cinco microservicios |
+
+Todo se conecta por la red externa `redutn`. Cada microservicio se registra en Consul al
+arrancar (con su health check) y se desregistra al apagarse; el orquestador descubre por
+Consul las instancias sanas de cada servicio. Los tokens llegan como Docker secret desde
+`../dockers/consul/generated/`, que crea la capa 1.
 
 | Servicio | Repo | Imagen | Público |
 |---|---|---|---|
-| orquestador | [vale36/Orquestador](https://github.com/vale36/Orquestador) | `orquestador:1.0.6` | sí, por Traefik: `https://pdf.universidad.localhost` |
-| validacion-pdf | [valentinapenasco/validacion-pdf](https://github.com/valentinapenasco/validacion-pdf) | `validacion-pdf:1.0.4` | no |
-| extraccion-texto | [NicolasPerez735/Extraccion-de-texto-pdf-](https://github.com/NicolasPerez735/Extraccion-de-texto-pdf-) | `extraccion-texto:1.2.1` (3 réplicas) | no; la balancea `traefik-interno` |
-| traefik-interno | — | `traefik:v3.6` | no (sin puertos publicados) |
-| persistencia-actualizaciones | [matiasscanoo/persistencia-actualizaciones](https://github.com/matiasscanoo/persistencia-actualizaciones) | `persistencia-actualizaciones:1.0.4` | no |
-| persistencia-consultas | [ManuelGomez33/persistencia-consultas](https://github.com/ManuelGomez33/persistencia-consultas) | `persistencia-consultas:1.0.4` | no |
-| mongodb | — | `mongo:7.0` (volumen `mongo_data`) | no |
-| redis | — | `redis:7` (solo caché: sin volumen ni persistencia) | no |
+| orquestador | [vale36/Orquestador](https://github.com/vale36/Orquestador) | `orquestador:1.0.7` | sí, por Traefik: `https://pdf.universidad.localhost` |
+| validacion-pdf | [valentinapenasco/validacion-pdf](https://github.com/valentinapenasco/validacion-pdf) | `validacion-pdf:1.0.5` | no |
+| extraccion-texto | [NicolasPerez735/Extraccion-de-texto-pdf-](https://github.com/NicolasPerez735/Extraccion-de-texto-pdf-) | `extraccion-texto:1.2.2` (3 réplicas, cada una registrada en Consul) | no |
+| persistencia-actualizaciones | [matiasscanoo/persistencia-actualizaciones](https://github.com/matiasscanoo/persistencia-actualizaciones) | `persistencia-actualizaciones:1.0.5` | no |
+| persistencia-consultas | [ManuelGomez33/persistencia-consultas](https://github.com/ManuelGomez33/persistencia-consultas) | `persistencia-consultas:1.0.5` | no |
 
-Ningún servicio publica puertos en el host. El orquestador es el único con labels de Traefik
-(`traefik.enable=true`); el Traefik del equipo (`dockers/traefik`, `exposedByDefault: false`)
-lo publica por HTTPS. El resto se alcanza solo por nombre dentro de la red `redutn`. MongoDB
-y Redis no publican 27017 ni 6379 porque Traefik usa esos puertos como entrypoints TCP.
+Ningún microservicio publica puertos en el host. El orquestador es el único con labels de
+Traefik; los demás se registran en Consul **sin** etiquetas `traefik.*`, así que Traefik
+tampoco los publica por Consul Catalog. MongoDB y Redis son los de la capa 1 (una sola
+base para las dos persistencias).
 
 ## Requisitos
 
-- Docker y Docker Compose.
-- La red externa `redutn`, una sola vez:
+- Docker Desktop (o Docker Engine) con Docker Compose, y [uv](https://docs.astral.sh/uv/).
+- Los repos clonados uno al lado del otro, con la infraestructura en una carpeta `dockers`:
 
-  ```bash
-  docker network create redutn
+  ```text
+  Proyecto Microservicios/
+  ├── dockers/          ← git clone https://github.com/vale36/infraestructura.git dockers
+  ├── integracion/
+  ├── Orquestador/
+  ├── validacion-pdf/
+  ├── Extraccion-de-texto-pdf-/
+  ├── persistencia-actualizaciones/
+  └── persistencia-consultas/
   ```
 
-- Los cinco repos clonados al lado de esta carpeta (`../validacion-pdf`, etc.).
-- El Traefik del equipo levantado (`dockers/traefik`, en la carpeta grande del proyecto):
+- Los certificados de Traefik en `dockers/traefik/certs/` (`cert.pem` y `key.pem`, no se
+  versionan porque `key.pem` es una clave privada). Se generan con
+  [mkcert](https://github.com/FiloSottile/mkcert), una vez por máquina, desde
+  `dockers/traefik`:
 
   ```bash
-  cd ../dockers/traefik && docker compose up -d
+  mkcert -install
+  mkcert -cert-file certs/cert.pem -key-file certs/key.pem "universidad.localhost" "*.universidad.localhost" 127.0.0.1 ::1
   ```
-
-  Publica 80 (redirige a HTTPS), 443, 6379 y 27017, con certificados mkcert para
-  `*.universidad.localhost` en `certs/`. Con la CA instalada, el navegador y k6 validan el
-  certificado sin avisos. Ver la sección siguiente.
-
-### La infraestructura de la cátedra (`dockers/`) no está en este repo
-
-`dockers/` es la infraestructura que provee la cátedra (Traefik y ejemplos de MongoDB y
-whoami), igual para todo el curso. **No se versiona a propósito**, por indicación del
-profesor: incluye la clave privada del certificado (`certs/key.pem`), un ejecutable de
-terceros (`mkcert.exe`) y archivos `.env`, y los certificados de mkcert son propios de cada
-máquina. Cada integrante la tiene en su carpeta del proyecto, al lado de este repo.
-
-Lo que este repo necesita de ese Traefik:
-
-| Requisito | Valor |
-|---|---|
-| Red | externa `redutn` |
-| Descubrimiento | proveedor Docker con `exposedByDefault: false` (solo se publica lo que tiene `traefik.enable=true`) |
-| Entrypoints | `http` en 80 con redirección a `https`; `https` en 443 |
-| Certificado | `*.universidad.localhost` en `certs/cert.pem` y `certs/key.pem` |
-
-Para generar los certificados en una máquina nueva, con
-[mkcert](https://github.com/FiloSottile/mkcert) descargado de su página oficial y desde
-`dockers/traefik`:
-
-```bash
-mkcert -install
-mkcert -cert-file certs/cert.pem -key-file certs/key.pem "universidad.localhost" "*.universidad.localhost" 127.0.0.1 ::1
-```
 
   El `curl` de Windows (Schannel) exige comprobar la revocación y los certificados de mkcert
-  no la publican (`CRYPT_E_NO_REVOCATION_CHECK`): usar `curl --ssl-no-revoke`, que sigue
-  validando la cadena y el nombre. No hace falta `-k`.
-
-## Levantar todo con un comando
-
-> **¿Primera vez?** El README del [Orquestador](https://github.com/vale36/Orquestador)
-> tiene una guía paso a paso, sin conocimientos previos: "Cómo ejecutar todo el sistema"
-> (herramientas, carpeta con los seis repos, este script, cómo probarlo y problemas comunes).
-
-```bash
-./scripts/levantar.sh            # verifica, construye, levanta y hace el humo
-./scripts/levantar.sh --tests    # además corre la suite de los cinco repos
-./scripts/levantar.sh --sin-build
-```
-
-El script verifica las herramientas, muestra en qué rama está cada repo, crea la red
-`redutn` y los `.env` que falten a partir de los `.env.example`, construye cada imagen con el
-tag del `.env`, levanta Traefik si no corre, levanta el stack esperando los healthchecks y
-prueba `/health` de los cinco servicios y del orquestador por Traefik. No usa secretos.
-
-Los pasos, a mano:
+  no la publican: usar `curl --ssl-no-revoke` (sigue validando la cadena y el nombre).
 
 ## Levantar todo
 
-1. Construir las imágenes con su tag de versión, desde la carpeta grande del proyecto:
+1. **Infraestructura** (capa 1), desde `dockers/`:
 
    ```bash
-   docker build -t validacion-pdf:1.0.4 validacion-pdf
-   docker build -t extraccion-texto:1.2.1 Extraccion-de-texto-pdf-
-   docker build -t persistencia-actualizaciones:1.0.4 persistencia-actualizaciones
-   docker build -t persistencia-consultas:1.0.4 persistencia-consultas
-   docker build -t orquestador:1.0.6 Orquestador
+   docker network create redutn      # una sola vez
+   docker compose up -d --wait
    ```
 
-   Estas versiones implementan el contrato 1.4.0 (Swagger muestra la misma versión que el tag
-   de la imagen; `/extraer` usa PyMuPDF con backpressure y el orquestador no reintenta ese
-   `503`) y salen de `main` de cada repo (2026-10-21: extracción #22, orquestador #28).
-   `scripts/levantar.sh` muestra en qué rama está cada repo.
+   El bootstrap de Consul crea las ACL y los tokens, y deja en el host
+   `consul/generated/microservices.token`, `consul/generated/orchestrator.token` y
+   `traefik/config/traefik.generated.yml` (ignorados por Git; nunca se muestran).
 
-2. Crear la configuración a partir de los ejemplos (no hay secretos; son nombres de la red
-   interna):
+2. **Microservicios** (capa 2), desde `integracion/`:
 
    ```bash
+   ./scripts/levantar.sh            # verifica, construye, levanta y hace el humo
+   ./scripts/levantar.sh --tests    # además corre la suite de los cinco repos
+   ./scripts/levantar.sh --sin-build
+   ```
+
+   El script verifica las herramientas y que la capa 1 esté sana, crea los `.env` que
+   falten a partir de los `.env.example`, construye cada imagen con el tag del `.env`,
+   levanta los microservicios esperando sus healthchecks y prueba `/health` de los cinco
+   y del orquestador por Traefik. A mano son estos pasos:
+
+   ```bash
+   docker build -t validacion-pdf:1.0.5 ../validacion-pdf
+   docker build -t extraccion-texto:1.2.2 ../Extraccion-de-texto-pdf-
+   docker build -t persistencia-actualizaciones:1.0.5 ../persistencia-actualizaciones
+   docker build -t persistencia-consultas:1.0.5 ../persistencia-consultas
+   docker build -t orquestador:1.0.7 ../Orquestador
    cp .env.example .env
    for f in env/*.env.example; do cp "$f" "${f%.example}"; done
-   ```
-
-3. Levantar y esperar a que todo quede `healthy`:
-
-   ```bash
    docker compose up -d --wait
-   docker compose ps
    ```
 
-El orquestador queda en `https://pdf.universidad.localhost` (`ORQUESTADOR_HOST`). El dashboard
-de Traefik (`https://traefik.universidad.localhost`) muestra un solo router de Docker,
-`orquestador@docker`. Para bajar todo,
-`docker compose down`, o `docker compose down -v` si también hay que borrar los datos.
+El orquestador queda en `https://pdf.universidad.localhost` (Swagger en `/docs`). La
+interfaz de Consul está en `http://127.0.0.1:8500/ui/` (el token se lee con
+`docker compose exec -T consul cat /consul/data/bootstrap/ui.token` desde `dockers/consul`).
+
+**Apagar**, en orden inverso y sin perder datos:
+
+```bash
+docker compose down              # en integracion/: los microservicios se desregistran de Consul
+docker compose down              # en dockers/: MongoDB y Consul conservan sus volúmenes
+```
+
+`docker compose down -v` en `dockers/` borraría la base y las ACL de Consul (se generan
+tokens nuevos en el próximo arranque).
 
 ## Variables
 
 `.env` (lo lee el compose): versiones de imagen (`*_VERSION`) y `ORQUESTADOR_HOST` (el host
-de la regla de Traefik).
-Todas son obligatorias: si falta una, `docker compose` no arranca.
+de la regla de Traefik). Todas son obligatorias: si falta una, `docker compose` no arranca.
 
-Un archivo por servicio en `env/`, cada uno con su `.env.example` versionado:
+Un archivo por servicio en `env/`, cada uno con su `.env.example` versionado. Los cuatro
+servicios que se registran llevan además `CONSUL_ENABLED`, `CONSUL_HTTP_ADDR`,
+`CONSUL_HTTP_TOKEN_FILE` y `CONSUL_SERVICE_PORT`:
 
-| Archivo | Variables |
+| Archivo | Variables propias |
 |---|---|
-| `validacion.env` | `PDF_MAX_SIZE_MB`, `APP_NAME`, `APP_VERSION` |
-| `extraccion.env` | `LOG_LEVEL`, `EXTRACT_QUEUE_TIMEOUT_SECONDS` (`5`: menor que el timeout de 10 s del orquestador, contrato 1.4.0) |
-| `actualizaciones.env` | `MONGO_URI`, `MONGO_DATABASE`, `MONGO_COLLECTION`, `REDIS_URL`, `LOCK_TIMEOUT_SECONDS` |
-| `consultas.env` | `MONGO_URI`, `MONGO_DATABASE`, `MONGO_COLLECTION`, `REDIS_URL`, `REDIS_TTL_SECONDS` |
-| `orquestador.env` | `VALIDACION_URL`, `EXTRACCION_URL`, `PERSISTENCIA_CONSULTAS_URL`, `PERSISTENCIA_ACTUALIZACIONES_URL`, `REQUEST_TIMEOUT_SECONDS`, `RETRY_ATTEMPTS`, `RETRY_DELAY_SECONDS` |
+| `validacion.env` | `PDF_MAX_SIZE_MB`, `APP_NAME`, `LOG_LEVEL`, `CONSUL_SERVICE_ADDRESS=validacion-pdf` |
+| `extraccion.env` | `LOG_LEVEL`, `EXTRACT_QUEUE_TIMEOUT_SECONDS` (`5`: menor que el timeout de 10 s del orquestador). **Sin** `CONSUL_SERVICE_ADDRESS`: cada réplica se registra con su IP |
+| `actualizaciones.env` | `MONGO_URI`, `MONGO_DATABASE`, `MONGO_COLLECTION`, `REDIS_URL`, `LOCK_TIMEOUT_SECONDS`, `LOG_LEVEL`, `CONSUL_SERVICE_ADDRESS=persistencia-actualizaciones` |
+| `consultas.env` | `MONGO_URI`, `MONGO_DATABASE`, `MONGO_COLLECTION`, `REDIS_URL`, `REDIS_TTL_SECONDS`, `LOG_LEVEL`, `CONSUL_SERVICE_ADDRESS=persistencia-consultas` |
+| `orquestador.env` | `CONSUL_ENABLED`, `CONSUL_HTTP_ADDR`, `CONSUL_HTTP_TOKEN_FILE`, `CONSUL_FALLBACK_ENABLED=false`, `REQUEST_TIMEOUT_SECONDS`, `RETRY_ATTEMPTS`, `RETRY_DELAY_SECONDS`, `LOG_LEVEL` |
 
-Los `.env` reales están en `.gitignore`.
+Los `.env` reales están en `.gitignore`. Ninguno tiene secretos: los tokens son archivos
+montados como Docker secret, nunca variables.
 
-`persistencia-actualizaciones` no arranca si MongoDB no responde (decisión del servicio). Por
-eso el compose espera el healthcheck de MongoDB y Redis (`depends_on: service_healthy`), y
-todos los servicios tienen `restart: unless-stopped`.
+Si la capa 1 todavía no está lista, los servicios no arrancan (no pueden registrarse en
+Consul o crear el índice de MongoDB) y `restart: unless-stopped` los reintenta hasta que lo
+esté.
 
 ## PDFs de prueba
 
@@ -310,6 +293,10 @@ Lectura:
   en la misma sesión.
 
 ## Balanceo de extracción con `traefik-interno` (contrato 1.2.0)
+
+> **Histórico.** Desde la etapa 6 (contrato 1.5.0) el orquestador descubre las réplicas por
+> Consul y reparte entre las sanas, así que `traefik-interno` y el cortocircuito de Traefik
+> ya no están en el compose. Se conserva la medición como registro del proceso.
 
 El orquestador llama a extracción a través de `traefik-interno`
 (`EXTRACCION_URL=http://traefik-interno`), un Traefik propio de este compose que reparte **por
@@ -509,7 +496,7 @@ profesor (2026-10-21, `extraccion-texto:1.2.1`, `orquestador:1.0.6`):
 - Los `504` los responde el Traefik de la cátedra (el orquestador no registró ninguno); el resto
   son cortes del timeout de 30 s de vegeta.
 - Para subir de ahí habría que escalar el orquestador (es *stateless*: réplicas detrás del
-  Traefik de la cátedra, o `--workers` en uvicorn). Queda para decidir con el grupo.
+  Traefik de la cátedra). No hace falta para el escenario del profesor (30/s).
 
 ### Backpressure de extracción
 
@@ -555,6 +542,46 @@ Como por el orquestador no se llega a saturar extracción, el mecanismo se prob�
   (`ResponseCodeRatio(500, 503, 0, 600)` + `ResponseCodeRatio(504, 600, 0, 600)`), o que el
   orquestador no reintente un `503` que viene de un circuito abierto. Mientras tanto, **el
   cortocircuito conviene dejarlo apagado** (ya es el valor por defecto).
+
+## Etapa 6: validación final con Consul (2026-10-30)
+
+Probado en la notebook (Docker Desktop, 12 CPUs) con las dos capas levantadas, entrando por
+Traefik con HTTPS como un cliente real. Cada prueba se ejecutó; ninguna se dio por buena sin
+correrla.
+
+**Antes de los arreglos** (composes por repo de la integración de Consul del 2026-10-28):
+el documento recién creado daba `404` al consultarlo (cada persistencia tenía su propia
+MongoDB), los cuatro servicios internos respondían `200` desde afuera por Traefik (se
+registraban con etiquetas `traefik.*`) y las réplicas de extracción figuraban en Consul con
+la misma dirección (no había failover real).
+
+| Prueba | Resultado |
+|---|---|
+| Alta de un PDF válido / repetido / no PDF / Base64 roto / sin `nombre` / corrupto | `201` / `409 DUPLICATE_CHECKSUM` / `422 PDF_INVALID` / `422 PDF_INVALID` / `400 VALIDATION_ERROR` / `422 PDF_CORRUPTED` |
+| Consulta posterior por id, por checksum y listado | el documento creado aparece en las tres |
+| Servicios internos desde afuera (`<servicio>.localhost`) | `404`; solo el orquestador responde |
+| Recorrido de un `correlation_id` | orquestador → validación → extracción (réplica 2) → actualizaciones |
+| Réplica de extracción muerta (`docker kill`) | 9 de 9 pedidos bien: 2 reintentos a otra réplica (~3,6 s); Consul la marca `critical` |
+| Réplica colgada (`docker pause`) | 1 pedido espera el timeout (10 s) y reintenta en otra; el resto no se entera |
+| Sin réplicas de extracción / sin validación | `503 DEPENDENCY_UNAVAILABLE` ("no tiene instancias saludables") en ~1 s |
+| Sin persistencia-actualizaciones | `503`; compensación SAGA `nothing-to-undo` registrada |
+| Consul caído | `503` ("Consul no pudo consultar…") en ~13 s |
+| Consul vuelve | los 6 registros vuelven a `passing` solos (están en el volumen) en ~15 s |
+| Un servicio arranca con Consul caído | no arranca (`Application startup failed`) y se reintenta solo hasta que Consul vuelve |
+| Redis caído | *fail-open*: altas y consultas siguen; `/health` `"redis": "caido"` con `200` |
+| MongoDB caída | `503 DATABASE_ERROR` y `/health` `503`; al volver, los datos siguen |
+| Bulkhead (1 réplica, cola 2, 80/s) | `503` por saturación sin reintento del orquestador (0 `reintentando … HTTP 503`) |
+
+Carga por el orquestador con Consul en el camino (3 réplicas):
+
+| Prueba | Sin Consul (2026-10-21) | Con Consul, sin caché | Con Consul y caché de 2 s (orquestador 1.0.7) |
+|---|---|---|---|
+| vegeta 30/s (escenario del profesor) | 69 ms | 68 ms | **56 ms**, 0 errores |
+| k6 5 VUs, 30 s | 53 ms, 93,5 PDF/s | 81 ms, 61,6 PDF/s | **61 ms, 81,4 PDF/s**, 0 errores |
+
+Sin caché, el orquestador le preguntaba a Consul en cada llamada (4 por PDF). Con la caché
+de 2 segundos el escenario del profesor queda mejor que antes de Consul, y el failover sigue
+funcionando (réplica muerta con caché: 8 de 8 pedidos bien, 1 reintento).
 
 ## Seguridad de imágenes (Grype)
 
@@ -803,6 +830,22 @@ que el `/health` del servicio responda.
 
 ## Deuda técnica
 
+Decisiones de la etapa 6 (proyecto académico, entorno de desarrollo):
+
+- **Un servicio no arranca si Consul está caído** (el registro es parte del arranque). Es a
+  propósito: por eso Consul se levanta primero, y `restart: unless-stopped` lo recupera solo.
+- **Un token para los cuatro servicios**, que puede registrar cualquier nombre
+  (`service_prefix ""`), y `ui.token` igual al administrativo. Alcanza para un entorno de
+  desarrollo con la UI solo en `127.0.0.1`; en producción iría un token por servicio.
+- **Consul tarda hasta 10 s** (un intervalo de chequeo) en dar por sana una instancia recién
+  arrancada: mientras tanto el tráfico va a las demás.
+- **Compensación SAGA de más**: si falla el *descubrimiento* de persistencia, el orquestador
+  igual compensa. No tiene efecto (`nothing-to-undo`) y mantiene la regla simple.
+- **El caso "la SAGA borra un documento"** está probado con tests: provocarlo en vivo exige
+  cortar la red justo después de guardar.
+- **Resuelto en la etapa 6:** el orquestador consultaba Consul en cada llamada; ahora guarda la
+  lista de instancias sanas 2 segundos (ver "Etapa 6").
+
 - **Consultas tardaba 4 s por request con Redis caído:** **resuelto** (2026-10-07, PR #18
   de consultas): timeout corto del cliente Redis, 1,0 s por request.
 - **Datos viejos en caché al volver Redis** (A9): **resuelto** (2026-10-07). Redis guardaba
@@ -816,13 +859,11 @@ que el `/health` del servicio responda.
   (timeout 2 s, 3 reintentos) falla, Docker lo marca `unhealthy` y Traefik lo saca (`404`).
   Pasó con extracción 1.0.3 por encima de ~35/s; con extracción 1.2.x la capacidad subió a
   ~90 PDF/s (ver "Prueba de carga con extracción 1.2.0") y a 60/s no se repitió.
-- **El orquestador es ahora el techo** (~90 PDF/s, un proceso al ~105 % de CPU con las réplicas
-  de extracción al ~20 %). Opciones: réplicas del orquestador detrás del Traefik de la cátedra
-  o `uvicorn --workers`. Pendiente de decidir con el grupo.
-- **Cortocircuito con backpressure.** El circuito cuenta los `503` de extracción saturada como
-  fallas, se abre y Traefik responde un `503` sin el formato común, que el orquestador sí
-  reintenta (ver "Cortocircuito con backpressure"). Por eso queda apagado (es el default).
-  Opciones: sacar los `503` de la expresión del circuito, o no reintentar el `503` de Traefik.
+- **El orquestador es el techo** (un solo proceso, ~80 PDF/s con k6). Sobra para el escenario
+  del profesor (30/s); si hiciera falta más, se le agregan réplicas detrás de Traefik.
+- **Cortocircuito con backpressure:** ya no aplica. El `circuitBreaker` estaba en
+  `traefik-interno`, que salió con Consul; ahora una instancia que falla la saca de la
+  rotación el health check de Consul.
 - **Requests perdidas hacia extracción por keep-alive:** **resuelto** (2026-10-21) con
   `idleConnTimeout: 4s` en `traefik-interno` (ver "Requests perdidas hacia extracción").
 - **Extracciones perdidas con `SIGKILL`.** Si una réplica muere sin `SIGTERM`, sus requests en
