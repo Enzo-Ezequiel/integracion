@@ -2,7 +2,7 @@
 
 ```
 Contrato: microservicios-pdf
-Versión: 1.5.0
+Versión: 1.6.0
 Formato: JSON UTF-8
 Identificación: UUID
 Fechas: ISO-8601 UTC
@@ -13,6 +13,23 @@ Pydantic de cada servicio son su implementación. Cualquier cambio sube la versi
 en [Cambios](#cambios): compatible (minor) o `BREAKING CHANGE` (major).
 
 ## Cambios
+
+### 1.6.0 (2026-11-07) — compatible con 1.5.0
+
+Configuración y publicación desde Consul, por lo que pide el profesor para el parcial: cada
+servicio saca sus variables de Consul y no del compose, y los labels de Traefik del orquestador
+viven en Consul. No cambian rutas, campos ni códigos de error; sin Consul
+(`CONSUL_ENABLED=false`) todo funciona como en la 1.5.0. Imágenes `validacion-pdf:1.1.0`,
+`extraccion-texto:1.3.0`, `persistencia-actualizaciones:1.1.0`, `persistencia-consultas:1.1.0`
+y `orquestador:1.1.0`.
+
+| # | Cambio | Sección |
+|---|---|---|
+| 1 | Con `CONSUL_ENABLED=true`, cada servicio lee su configuración del KV de Consul, bajo `config/<nombre en Consul>/<VARIABLE>`, y tiene prioridad sobre el entorno. Del entorno solo llegan `CONSUL_ENABLED`, `CONSUL_HTTP_ADDR` y `CONSUL_HTTP_TOKEN_FILE`. Sin claves en el KV o sin Consul, el servicio no arranca. | [Consul](#consul) |
+| 2 | Un proceso de administración, `consul-config`, carga `env/*.env` en el KV antes que los microservicios, con un token propio que solo escribe bajo `config/`. | [Despliegue](#despliegue) |
+| 3 | El orquestador se registra en Consul (`orquestador`) con los tags de Traefik de `CONSUL_SERVICE_TAGS` y Traefik lo publica por Consul Catalog. El compose ya no tiene labels. Variables nuevas del orquestador: `CONSUL_SERVICE_ADDRESS`, `CONSUL_SERVICE_PORT`, `CONSUL_SERVICE_TAGS` (lista JSON). | [Consul](#consul), [Despliegue](#despliegue) |
+| 4 | Vuelve el cortocircuito de Traefik, en la entrada pública (router del orquestador), junto con un límite de tasa. Los dos son tags en Consul. | [Despliegue](#despliegue) |
+| 5 | Traefik publica solo 80 y 443 (sin los entrypoints TCP de MongoDB y Redis, que nadie usaba). | [Despliegue](#despliegue) |
 
 ### 1.5.0 (2026-10-30) — compatible con 1.4.0
 
@@ -352,7 +369,8 @@ procesó nada y el cliente puede volver a intentar después de `Retry-After`. Se
   `PERSISTENCIA_ACTUALIZACIONES_URL`, `REQUEST_TIMEOUT_SECONDS`, `RETRY_ATTEMPTS`,
   `RETRY_DELAY_SECONDS`, *(1.2.0)* `LOG_LEVEL`; *(1.5.0)* `CONSUL_ENABLED`, `CONSUL_HTTP_ADDR`,
   `CONSUL_HTTP_TOKEN_FILE`, `CONSUL_FALLBACK_ENABLED`. Con Consul las cuatro `*_URL` son opcionales
-  (solo se usan como fallback explícito).
+  (solo se usan como fallback explícito). *(1.6.0)* `CONSUL_SERVICE_ADDRESS`,
+  `CONSUL_SERVICE_PORT` y `CONSUL_SERVICE_TAGS` (registro propio con los tags de Traefik).
 
 *(1.1.0)*
 
@@ -387,6 +405,24 @@ procesó nada y el cliente puede volver a intentar después de `Retry-After`. Se
   el reintento de las llamadas idempotentes va a la siguiente.
 - Consul corre con ACL `default_policy = "deny"` y sus datos en un volumen: al reiniciarse
   conserva los registros.
+
+*(1.6.0)*
+
+- **Configuración en el KV.** Con `CONSUL_ENABLED=true`, cada servicio lee al arrancar
+  `GET /v1/kv/config/<nombre en Consul>/?recurse` con su token y usa esas claves (en
+  minúsculas, como los campos de su `Settings`) por encima del entorno. Ejemplo:
+  `config/persistencia-consultas/REDIS_TTL_SECONDS`. Sin claves (`404`) o sin Consul, no
+  arranca: la configuración no se inventa. Los valores no se registran en los logs.
+- La conexión a Consul (`CONSUL_ENABLED`, `CONSUL_HTTP_ADDR`, `CONSUL_HTTP_TOKEN_FILE`) es lo
+  único que sigue llegando por el entorno, y no se carga en el KV.
+- Permisos: los servicios internos leen `config/` con el token de microservicios; el
+  orquestador lee solo `config/orquestador/`, y además puede registrar **solo** el servicio
+  `orquestador`; `consul-config` escribe `config/` con el token `config-loader` y no registra
+  servicios.
+- **El orquestador se registra** como los internos (ID `orquestador-<hostname>`, health
+  check a `/health`) pero con los tags de `CONSUL_SERVICE_TAGS`: las reglas de Traefik que
+  antes eran labels del compose. Al apagarse sale de Consul antes de cerrar, así Traefik deja
+  de mandarle tráfico.
 
 ## MongoDB
 
@@ -453,3 +489,23 @@ procesó nada y el cliente puede volver a intentar después de `Retry-After`. Se
   y su cortocircuito ya no están (los puntos de la 1.2.0 sobre ellos quedan como historia).
   `EXTRACCION_URL` solo se usa con `CONSUL_ENABLED=false`.
 - Los internos no llevan etiquetas `traefik.*` en Consul ni labels en Docker.
+
+*(1.6.0)* **Configuración y publicación por Consul.**
+
+- `consul-config` (imagen de Consul, `restart: "no"`) carga `env/*.env` en el KV y termina;
+  cada microservicio espera con `depends_on: condition: service_completed_successfully`. Antes
+  de cargar borra `config/<servicio>/`, para que una variable quitada no quede vieja.
+- Los microservicios ya no llevan `env_file`: solo las tres variables de conexión a Consul.
+- El orquestador se publica por **Consul Catalog** (proveedor de Traefik ya configurado), con
+  estos tags: `traefik.enable=true`, router con `Host(pdf.universidad.localhost)`, entrypoint
+  `https`, `tls=true` y dos middlewares:
+  - **Cortocircuito** `circuitBreaker` con
+    `NetworkErrorRatio() > 0.30 || ResponseCodeRatio(500, 503, 0, 600) > 0.30`: cuenta
+    errores de red y `500`-`502`, **no** el `503` (backpressure de extracción y dependencia
+    caída), que en la medición de la 1.2.0 abría el circuito y empeoraba todo.
+  - **Límite de tasa** `rateLimit`: 200 req/s promedio, ráfaga de 100, holgado para las
+    pruebas de carga (30 a 90 PDF/s).
+- Protegen la **entrada pública**. Las llamadas internas del orquestador van directo a las
+  instancias que da Consul; ahí la protección es Consul (saca la instancia caída) más el
+  reintento de las llamadas idempotentes.
+- Traefik publica solo 80 y 443; MongoDB y Redis se usan por nombre dentro de `redutn`.
