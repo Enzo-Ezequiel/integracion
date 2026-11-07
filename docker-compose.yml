@@ -1,29 +1,54 @@
 # Segunda capa: los cinco microservicios del contrato microservicios-pdf.
 #
 # Va encima de la primera capa, la infraestructura compartida del repo dockers (Consul,
-# Traefik, MongoDB y Redis), que se levanta antes con dockers/levantar.ps1. Todo se
-# conecta por la red externa redutn. Cada servicio se registra en Consul con el token de
-# microservicios y el orquestador descubre las instancias sanas con su propio token de
-# solo lectura; los dos llegan como Docker secret desde ../dockers/consul/generated.
+# Traefik, MongoDB y Redis), que se levanta antes. Todo se conecta por la red externa
+# redutn. Contrato 1.6.0:
+# - consul-config carga env/*.env en el KV de Consul (config/<servicio>/) y termina.
+# - Cada microservicio recibe por entorno solo cómo conectarse a Consul (x-consul) y lee
+#   su configuración del KV al arrancar.
+# - Cada uno se registra en Consul; el orquestador, además, con los tags de Traefik que
+#   lo publican (Consul Catalog). Por eso ningún servicio lleva labels ni puertos.
+# Los tokens llegan como Docker secret desde ../dockers/consul/generated.
 name: integracion-pdf
 
+x-consul: &consul
+  CONSUL_ENABLED: "true"
+  CONSUL_HTTP_ADDR: http://consul:8500
+  CONSUL_HTTP_TOKEN_FILE: /run/secrets/consul_microservices_token
+
+x-configurado: &configurado
+  consul-config:
+    condition: service_completed_successfully
+
 services:
+  # Proceso de administración (12-Factor XII): corre una vez, antes que los servicios.
+  consul-config:
+    image: hashicorp/consul:${CONSUL_VERSION:-1.21.5}
+    entrypoint: ["/bin/sh", "/scripts/cargar-config-consul.sh"]
+    environment:
+      CONSUL_HTTP_ADDR: http://consul:8500
+      CONSUL_HTTP_TOKEN_FILE: /run/secrets/config_loader_token
+    volumes:
+      - ./env:/config:ro
+      - ./scripts/cargar-config-consul.sh:/scripts/cargar-config-consul.sh:ro
+    secrets: [config_loader_token]
+    networks: [redutn]
+    restart: "no"
+
   orquestador:
     image: orquestador:${ORQUESTADOR_VERSION:?definir en .env}
-    env_file: ./env/orquestador.env
+    environment:
+      <<: *consul
+      CONSUL_HTTP_TOKEN_FILE: /run/secrets/consul_orchestrator_token
     secrets:
       - source: consul_orchestrator_token
         target: /run/secrets/consul_orchestrator_token
     networks: [redutn]
-    # Único servicio público, por el Traefik de la infraestructura. Los demás no llevan
-    # labels ni etiquetas de Traefik en Consul: quedan solo en la red interna.
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.orquestador.rule=Host(`${ORQUESTADOR_HOST:?definir en .env}`)"
-      - "traefik.http.routers.orquestador.entrypoints=https"
-      - "traefik.http.routers.orquestador.tls=true"
-      - "traefik.http.services.orquestador.loadbalancer.server.port=8000"
+    # Único servicio público: Traefik lo encuentra en Consul por los tags de
+    # CONSUL_SERVICE_TAGS (env/orquestador.env, cargado en el KV). Los demás se registran
+    # sin tags de Traefik y quedan solo en la red interna.
     depends_on:
+      <<: *configurado
       validacion-pdf:
         condition: service_healthy
       extraccion-texto:
@@ -37,7 +62,8 @@ services:
 
   validacion-pdf:
     image: validacion-pdf:${VALIDACION_VERSION:?definir en .env}
-    env_file: ./env/validacion.env
+    environment: *consul
+    depends_on: *configurado
     secrets: [consul_microservices_token]
     networks: [redutn]
     stop_grace_period: 40s
@@ -45,7 +71,8 @@ services:
 
   extraccion-texto:
     image: extraccion-texto:${EXTRACCION_VERSION:?definir en .env}
-    env_file: ./env/extraccion.env
+    environment: *consul
+    depends_on: *configurado
     secrets: [consul_microservices_token]
     networks: [redutn]
     # Cada réplica se registra en Consul con su propia IP (extraccion.env no fija
@@ -58,7 +85,8 @@ services:
 
   persistencia-actualizaciones:
     image: persistencia-actualizaciones:${ACTUALIZACIONES_VERSION:?definir en .env}
-    env_file: ./env/actualizaciones.env
+    environment: *consul
+    depends_on: *configurado
     secrets: [consul_microservices_token]
     networks: [redutn]
     # No arranca si MongoDB no responde (decisión del servicio): si la infraestructura
@@ -68,7 +96,8 @@ services:
 
   persistencia-consultas:
     image: persistencia-consultas:${CONSULTAS_VERSION:?definir en .env}
-    env_file: ./env/consultas.env
+    environment: *consul
+    depends_on: *configurado
     secrets: [consul_microservices_token]
     networks: [redutn]
     stop_grace_period: 40s
@@ -78,9 +107,11 @@ networks:
   redutn:
     external: true
 
-# Archivos generados por dockers/levantar.ps1 (ignorados por Git en ese repo). El valor
-# nunca aparece en este archivo ni en los logs.
+# Archivos generados por el bootstrap de Consul en ../dockers (ignorados por Git en ese
+# repo). El valor nunca aparece en este archivo ni en los logs.
 secrets:
+  config_loader_token:
+    file: ../dockers/consul/generated/config-loader.token
   consul_microservices_token:
     file: ../dockers/consul/generated/microservices.token
   consul_orchestrator_token:
