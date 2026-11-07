@@ -21,16 +21,45 @@ Consul las instancias sanas de cada servicio. Los tokens llegan como Docker secr
 
 | Servicio | Repo | Imagen | Público |
 |---|---|---|---|
-| orquestador | [vale36/Orquestador](https://github.com/vale36/Orquestador) | `orquestador:1.0.7` | sí, por Traefik: `https://pdf.universidad.localhost` |
-| validacion-pdf | [valentinapenasco/validacion-pdf](https://github.com/valentinapenasco/validacion-pdf) | `validacion-pdf:1.0.5` | no |
-| extraccion-texto | [NicolasPerez735/Extraccion-de-texto-pdf-](https://github.com/NicolasPerez735/Extraccion-de-texto-pdf-) | `extraccion-texto:1.2.2` (3 réplicas, cada una registrada en Consul) | no |
-| persistencia-actualizaciones | [matiasscanoo/persistencia-actualizaciones](https://github.com/matiasscanoo/persistencia-actualizaciones) | `persistencia-actualizaciones:1.0.5` | no |
-| persistencia-consultas | [ManuelGomez33/persistencia-consultas](https://github.com/ManuelGomez33/persistencia-consultas) | `persistencia-consultas:1.0.5` | no |
+| orquestador | [vale36/Orquestador](https://github.com/vale36/Orquestador) | `orquestador:1.1.0` | sí, por Traefik: `https://pdf.universidad.localhost` |
+| validacion-pdf | [valentinapenasco/validacion-pdf](https://github.com/valentinapenasco/validacion-pdf) | `validacion-pdf:1.1.0` | no |
+| extraccion-texto | [NicolasPerez735/Extraccion-de-texto-pdf-](https://github.com/NicolasPerez735/Extraccion-de-texto-pdf-) | `extraccion-texto:1.3.0` (3 réplicas, cada una registrada en Consul) | no |
+| persistencia-actualizaciones | [matiasscanoo/persistencia-actualizaciones](https://github.com/matiasscanoo/persistencia-actualizaciones) | `persistencia-actualizaciones:1.1.0` | no |
+| persistencia-consultas | [ManuelGomez33/persistencia-consultas](https://github.com/ManuelGomez33/persistencia-consultas) | `persistencia-consultas:1.1.0` | no |
 
-Ningún microservicio publica puertos en el host. El orquestador es el único con labels de
-Traefik; los demás se registran en Consul **sin** etiquetas `traefik.*`, así que Traefik
-tampoco los publica por Consul Catalog. MongoDB y Redis son los de la capa 1 (una sola
-base para las dos persistencias).
+Ningún microservicio publica puertos en el host ni lleva labels. El orquestador es el único
+público: se registra en Consul con los tags de Traefik (contrato 1.6.0) y Traefik lo publica
+por Consul Catalog. Los demás se registran **sin** etiquetas `traefik.*`, así que Traefik no
+los publica. MongoDB y Redis son los de la capa 1 (una sola base para las dos persistencias).
+
+### Configuración y labels desde Consul (contrato 1.6.0)
+
+```
+env/*.env ──► consul-config ──► KV de Consul: config/<servicio>/<VARIABLE>
+                                      │
+            cada microservicio lo lee al arrancar (con su token)
+                                      │
+orquestador ──► se registra en Consul con CONSUL_SERVICE_TAGS ──► Traefik (Consul Catalog)
+```
+
+- **Configuración:** el compose les pasa a los microservicios **solo** cómo conectarse a
+  Consul (`CONSUL_ENABLED`, `CONSUL_HTTP_ADDR`, `CONSUL_HTTP_TOKEN_FILE`). Todo lo demás lo
+  leen del KV. `consul-config` corre antes, carga `env/*.env` (borra lo anterior de cada
+  servicio) y termina; sin esas claves, un servicio no arranca.
+- **Labels:** las reglas de Traefik del orquestador (Host, HTTPS, cortocircuito y límite de
+  tasa) son tags de su registro en Consul, guardados en `config/orquestador/CONSUL_SERVICE_TAGS`.
+- **Cambiar una variable:** editar `env/<servicio>.env`, `docker compose up -d consul-config`
+  y reiniciar el servicio (`docker compose restart <servicio>`): lee la configuración al
+  arrancar.
+
+Cómo mostrarlo (UI de Consul en <http://127.0.0.1:8500/ui/>, con el token de interfaz):
+
+- **Key/Value → config/**: una carpeta por servicio con sus variables.
+- **Services → orquestador → Tags**: las reglas de Traefik. Los otros cuatro, sin tags.
+- Panel de Traefik (`https://traefik.universidad.localhost`): el router `orquestador@consulcatalog`
+  con los middlewares `orquestador-cortocircuito` y `orquestador-limite`.
+- Por consola, sin la UI: `docker compose logs consul-config` (cuántas claves cargó por
+  servicio, sin valores).
 
 ## Requisitos
 
@@ -114,12 +143,15 @@ tokens nuevos en el próximo arranque).
 
 ## Variables
 
-`.env` (lo lee el compose): versiones de imagen (`*_VERSION`) y `ORQUESTADOR_HOST` (el host
-de la regla de Traefik). Todas son obligatorias: si falta una, `docker compose` no arranca.
+`.env` (lo lee el compose): versiones de imagen (`*_VERSION`) y `ORQUESTADOR_HOST` (lo usa el
+humo de `levantar.sh`; tiene que coincidir con el `Host` de los tags del orquestador). Las
+versiones son obligatorias: si falta una, `docker compose` no arranca.
 
-Un archivo por servicio en `env/`, cada uno con su `.env.example` versionado. Los cuatro
-servicios que se registran llevan además `CONSUL_ENABLED`, `CONSUL_HTTP_ADDR`,
-`CONSUL_HTTP_TOKEN_FILE` y `CONSUL_SERVICE_PORT`:
+Un archivo por servicio en `env/`, cada uno con su `.env.example` versionado. **No llegan a
+los contenedores:** `consul-config` los carga en el KV de Consul (contrato 1.6.0). Todos
+llevan `CONSUL_SERVICE_PORT`; la conexión a Consul la pone el compose y no va en estos
+archivos. `levantar.sh` se detiene si a un `.env` le falta una clave de su `.env.example`
+(por ejemplo, uno creado con una versión anterior):
 
 | Archivo | Variables propias |
 |---|---|
@@ -127,7 +159,7 @@ servicios que se registran llevan además `CONSUL_ENABLED`, `CONSUL_HTTP_ADDR`,
 | `extraccion.env` | `LOG_LEVEL`, `EXTRACT_QUEUE_TIMEOUT_SECONDS` (`5`: menor que el timeout de 10 s del orquestador). **Sin** `CONSUL_SERVICE_ADDRESS`: cada réplica se registra con su IP |
 | `actualizaciones.env` | `MONGO_URI`, `MONGO_DATABASE`, `MONGO_COLLECTION`, `REDIS_URL`, `LOCK_TIMEOUT_SECONDS`, `LOG_LEVEL`, `CONSUL_SERVICE_ADDRESS=persistencia-actualizaciones` |
 | `consultas.env` | `MONGO_URI`, `MONGO_DATABASE`, `MONGO_COLLECTION`, `REDIS_URL`, `REDIS_TTL_SECONDS`, `LOG_LEVEL`, `CONSUL_SERVICE_ADDRESS=persistencia-consultas` |
-| `orquestador.env` | `CONSUL_ENABLED`, `CONSUL_HTTP_ADDR`, `CONSUL_HTTP_TOKEN_FILE`, `CONSUL_FALLBACK_ENABLED=false`, `REQUEST_TIMEOUT_SECONDS`, `RETRY_ATTEMPTS`, `RETRY_DELAY_SECONDS`, `LOG_LEVEL` |
+| `orquestador.env` | `CONSUL_FALLBACK_ENABLED=false`, `REQUEST_TIMEOUT_SECONDS`, `RETRY_ATTEMPTS`, `RETRY_DELAY_SECONDS`, `LOG_LEVEL`, `CONSUL_SERVICE_ADDRESS=orquestador`, `CONSUL_SERVICE_TAGS` (lista JSON con las reglas de Traefik) |
 
 Los `.env` reales están en `.gitignore`. Ninguno tiene secretos: los tokens son archivos
 montados como Docker secret, nunca variables.
@@ -832,6 +864,20 @@ que el `/health` del servicio responda.
 
 Decisiones de la etapa 6 (proyecto académico, entorno de desarrollo):
 
+- *(1.6.0)* **El cortocircuito protege la entrada pública, no las llamadas internas.** Está
+  en el router del orquestador en Traefik. Las llamadas del orquestador a extracción y
+  persistencia van directo a las instancias que da Consul, sin pasar por Traefik: ahí la
+  protección es Consul (saca la instancia caída) más el reintento de las idempotentes.
+  Volver a pasar las internas por Traefik suma un salto por llamada.
+- *(1.6.0)* **El host público figura dos veces:** en el tag `Host(...)` de
+  `env/orquestador.env` (lo que usa Traefik) y en `ORQUESTADOR_HOST` de `.env` (solo para el
+  humo). Cambiar uno exige cambiar el otro.
+- *(1.6.0)* **Los compose propios de cada microservicio** (en su repo, con
+  `CONSUL_ENABLED=true`) necesitan la configuración cargada en el KV: el camino normal es el
+  compose de este repo.
+- *(1.6.0)* **Una variable nueva en el KV no se aplica en caliente:** cada servicio lee la
+  configuración al arrancar, así que hay que reiniciarlo.
+
 - **Un servicio no arranca si Consul está caído** (el registro es parte del arranque). Es a
   propósito: por eso Consul se levanta primero, y `restart: unless-stopped` lo recupera solo.
 - **Un token para los cuatro servicios**, que puede registrar cualquier nombre
@@ -861,9 +907,10 @@ Decisiones de la etapa 6 (proyecto académico, entorno de desarrollo):
   ~90 PDF/s (ver "Prueba de carga con extracción 1.2.0") y a 60/s no se repitió.
 - **El orquestador es el techo** (un solo proceso, ~80 PDF/s con k6). Sobra para el escenario
   del profesor (30/s); si hiciera falta más, se le agregan réplicas detrás de Traefik.
-- **Cortocircuito con backpressure:** ya no aplica. El `circuitBreaker` estaba en
-  `traefik-interno`, que salió con Consul; ahora una instancia que falla la saca de la
-  rotación el health check de Consul.
+- **Cortocircuito con backpressure:** resuelto en la 1.6.0. El `circuitBreaker` estaba en
+  `traefik-interno`, que salió con Consul. Volvió en el router público del orquestador, con
+  una expresión que no cuenta el `503` de backpressure (ver "Configuración y labels desde
+  Consul").
 - **Requests perdidas hacia extracción por keep-alive:** **resuelto** (2026-10-21) con
   `idleConnTimeout: 4s` en `traefik-interno` (ver "Requests perdidas hacia extracción").
 - **Extracciones perdidas con `SIGKILL`.** Si una réplica muere sin `SIGTERM`, sus requests en
