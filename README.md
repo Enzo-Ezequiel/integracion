@@ -92,6 +92,32 @@ Cómo mostrarlo (UI de Consul en <http://127.0.0.1:8500/ui/>, con el token de in
 
 ## Levantar todo
 
+### Con un solo comando
+
+`scripts/sistema.sh` automatiza todo, desde `integracion/`, en Git Bash. Desde PowerShell es
+lo mismo con `.\scripts\sistema.ps1 <comando>`:
+
+```bash
+./scripts/sistema.sh todo       # levantar + tests + demo: lo que se muestra en el parcial
+./scripts/sistema.sh levantar   # red redutn, infraestructura (dockers), microservicios y humo
+./scripts/sistema.sh tests      # suites de los cinco microservicios, de dockers y de integracion
+./scripts/sistema.sh demo       # sube un PDF nuevo y muestra su recorrido completo
+./scripts/sistema.sh grype      # escanea las imágenes
+./scripts/sistema.sh apagar     # baja las dos capas, sin borrar datos
+```
+
+`demo` genera un PDF con contenido único (no da `409`), lo sube por Traefik y muestra:
+
+- la respuesta (sin el texto completo), el `correlation_id` y el tiempo de extracción;
+- cada línea de log de los cinco servicios con ese `correlation_id`;
+- el documento guardado en MongoDB (sin el texto);
+- las claves de configuración en Consul (sin valores) y los servicios con sus tags;
+- el router del orquestador en Traefik (descubierto por Consul Catalog) y sus middlewares.
+
+Abajo, lo que hace paso por paso.
+
+### Paso por paso
+
 1. **Infraestructura** (capa 1), desde `dockers/`:
 
    ```bash
@@ -107,7 +133,7 @@ Cómo mostrarlo (UI de Consul en <http://127.0.0.1:8500/ui/>, con el token de in
 
    ```bash
    ./scripts/levantar.sh            # verifica, construye, levanta y hace el humo
-   ./scripts/levantar.sh --tests    # además corre la suite de los cinco repos
+   ./scripts/levantar.sh --tests    # además corre todas las suites (sistema.sh tests)
    ./scripts/levantar.sh --sin-build
    ```
 
@@ -117,11 +143,11 @@ Cómo mostrarlo (UI de Consul en <http://127.0.0.1:8500/ui/>, con el token de in
    y del orquestador por Traefik. A mano son estos pasos:
 
    ```bash
-   docker build -t validacion-pdf:1.0.5 ../validacion-pdf
-   docker build -t extraccion-texto:1.2.2 ../Extraccion-de-texto-pdf-
-   docker build -t persistencia-actualizaciones:1.0.5 ../persistencia-actualizaciones
-   docker build -t persistencia-consultas:1.0.5 ../persistencia-consultas
-   docker build -t orquestador:1.0.7 ../Orquestador
+   docker build -t validacion-pdf:1.1.0 ../validacion-pdf
+   docker build -t extraccion-texto:1.3.0 ../Extraccion-de-texto-pdf-
+   docker build -t persistencia-actualizaciones:1.1.0 ../persistencia-actualizaciones
+   docker build -t persistencia-consultas:1.1.0 ../persistencia-consultas
+   docker build -t orquestador:1.1.0 ../Orquestador
    cp .env.example .env
    for f in env/*.env.example; do cp "$f" "${f%.example}"; done
    docker compose up -d --wait
