@@ -2,7 +2,7 @@
 # Levanta la segunda capa del sistema, los cinco microservicios, sobre la infraestructura
 # (primera capa) ya levantada: verifica herramientas y que la infraestructura esté sana,
 # crea los .env, construye las imágenes con el tag del .env, levanta los microservicios y
-# hace el humo. Con --tests corre además la suite de cada microservicio.
+# hace el humo. Con --tests corre además todas las suites (sistema.sh tests).
 #
 # Uso (desde integracion/): ./scripts/levantar.sh [--tests] [--sin-build]
 # Requiere los cinco repos clonados al lado de integracion/ y la infraestructura levantada
@@ -106,13 +106,7 @@ echo "https://$ORQUESTADOR_HOST/health (Traefik) → $codigo"
 [ "$codigo" = 200 ] || falla "el orquestador no responde por Traefik"
 
 if [ "$CORRER_TESTS" = si ]; then
-  paso "Tests de cada microservicio"
-  for linea in "${SERVICIOS[@]}"; do
-    IFS='|' read -r _ repo _ <<<"$linea"
-    echo "-- $repo"
-    # python -m pytest: en Windows, Control de aplicaciones bloquea a veces pytest.exe.
-    (cd "$RAIZ/$repo" && uv sync -q && uv run python -m pytest -p no:cacheprovider | grep -E "passed|failed" | tail -1)
-  done
+  ./scripts/sistema.sh tests
 fi
 
 paso "Listo: https://$ORQUESTADOR_HOST"
