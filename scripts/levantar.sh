@@ -58,7 +58,7 @@ for contenedor in consul mongodb redis; do
 done
 [ "$(docker inspect -f '{{.State.Running}}' traefik 2>/dev/null)" = true ] ||
   falla "Traefik no corre: en ../dockers, docker compose up -d --wait"
-for token in microservices orchestrator; do
+for token in microservices orchestrator config-loader; do
   [ -s "$RAIZ/dockers/consul/generated/$token.token" ] ||
     falla "falta el token $token (lo crea el bootstrap de ../dockers)"
 done
@@ -67,7 +67,14 @@ echo "Consul, Traefik, MongoDB y Redis: ok"
 paso "Configuración (.env desde los .env.example que falten)"
 [ -f .env ] || cp .env.example .env
 for ejemplo in env/*.env.example; do
-  [ -f "${ejemplo%.example}" ] || cp "$ejemplo" "${ejemplo%.example}"
+  real="${ejemplo%.example}"
+  [ -f "$real" ] || cp "$ejemplo" "$real"
+  # Un .env de una versión anterior puede no tener una clave nueva (por ejemplo los tags
+  # de Traefik del orquestador, contrato 1.6.0): sin ella, consul-config no la carga.
+  for clave in $(grep -v '^#' "$ejemplo" | sed -n 's/=.*//p'); do
+    grep -q "^$clave=" "$real" ||
+      falla "$real no tiene $clave: borrarlo para recrearlo desde $ejemplo"
+  done
 done
 set -a; source .env; set +a
 echo "ok"
