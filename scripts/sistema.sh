@@ -63,7 +63,7 @@ demo() {
   set -a; source .env; set +a
   local tmp pdf codigo cid id db coleccion
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
+  trap "rm -rf -- '$tmp'" EXIT
 
   paso "PDF nuevo (contenido único: no da 409)"
   uv run -q scripts/generar_pdfs.py --cantidad 1 --paginas 3 --salida "$tmp" --semilla "demo$(date +%s)" >/dev/null
@@ -72,7 +72,7 @@ demo() {
   printf '{"archivo_base64":"%s","nombre":"%s"}' "$(base64 -w0 "$pdf")" "$(basename "$pdf")" >"$tmp/body.json"
 
   paso "POST https://$ORQUESTADOR_HOST/pdf (Traefik → orquestador → validación → extracción → persistencia)"
-  codigo=$(curl -s --ssl-no-revoke -o "$tmp/respuesta.json" -D "$tmp/headers.txt" -w '%{http_code}' \
+  codigo=$(curl -k -sS --ssl-no-revoke -o "$tmp/respuesta.json" -D "$tmp/headers.txt" -w '%{http_code}' \
     -X POST "https://$ORQUESTADOR_HOST/pdf" -H "Content-Type: application/json" --data-binary @"$tmp/body.json")
   cid=$(tr -d '\r' <"$tmp/headers.txt" | sed -n 's/^[Xx]-[Cc]orrelation-[Ii][Dd]: //p')
   echo "HTTP $codigo, correlation_id $cid, extracción $(tr -d '\r' <"$tmp/headers.txt" | sed -n 's/^[Xx]-[Ee]xtraction-[Tt]ime-[Mm]s: //p') ms"
