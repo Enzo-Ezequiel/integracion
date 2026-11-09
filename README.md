@@ -92,6 +92,29 @@ Cómo mostrarlo (UI de Consul en <http://127.0.0.1:8500/ui/>, con el token de in
 
 ## Levantar todo
 
+### Prueba por prueba (botón ▷ de VS Code)
+
+`pruebas/` tiene un script de PowerShell por cada cosa que se muestra. Se abren en VS Code y
+se corren con ▷, en orden. Cada uno dice qué hace, qué se espera y qué decir:
+
+| Script | Qué muestra | Se espera |
+|---|---|---|
+| `00-levantar.ps1` | Las dos capas, con el humo | `Listo: https://pdf.universidad.localhost` |
+| `01-contenedores.ps1` | Contenedores y puertos | Solo Traefik publica 80 y 443 |
+| `02-consul.ps1` | Servicios en Consul; abre la UI con el token en el portapapeles | Los cinco servicios |
+| `03-traefik.ps1` | El router del orquestador | `orquestador@consulcatalog`, `enabled` |
+| `04-recorrido-de-un-pdf.ps1` | `sistema.sh demo` | `201` y los logs de los cinco servicios |
+| `05-pdf-nuevo.ps1` | Un PDF nuevo | `201` |
+| `06-pdf-duplicado.ps1` | El mismo PDF dos veces | `201` y después `409 DUPLICATE_CHECKSUM` |
+| `07-no-es-pdf.ps1` | Un `.txt` | `422 PDF_INVALID` |
+| `08-pdf-con-contrasena.ps1` | Un PDF con contraseña | `422 PDF_INVALID`, `protegido_con_contrasena` |
+| `09-replica-caida.ps1` | Apaga una réplica de extracción | `201` igual; después la vuelve a levantar |
+| `10-persistencia-caida.ps1` | Apaga persistencia-actualizaciones | `503 DEPENDENCY_UNAVAILABLE`; después la levanta |
+| `11-redis-caido.ps1` | Apaga Redis | `201` igual (*fail-open*); después lo levanta |
+| `12-tests.ps1` | Las suites de los siete repos | Todas en verde |
+| `13-grype.ps1` | Vulnerabilidades de las imágenes | `seguridad/resumen.md` |
+| `14-apagar.ps1` | Baja las dos capas | Los datos de MongoDB quedan |
+
 ### Con un solo comando
 
 `scripts/sistema.sh` automatiza todo, desde `integracion/`, en Git Bash. Desde PowerShell es
