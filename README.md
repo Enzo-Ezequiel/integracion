@@ -21,9 +21,9 @@ Consul las instancias sanas de cada servicio. Los tokens llegan como Docker secr
 
 | Servicio | Repo | Imagen | Público |
 |---|---|---|---|
-| orquestador | [vale36/Orquestador](https://github.com/vale36/Orquestador) | `orquestador:1.1.0` | sí, por Traefik: `https://pdf.universidad.localhost` |
-| validacion-pdf | [valentinapenasco/validacion-pdf](https://github.com/valentinapenasco/validacion-pdf) | `validacion-pdf:1.1.0` | no |
-| extraccion-texto | [NicolasPerez735/Extraccion-de-texto-pdf-](https://github.com/NicolasPerez735/Extraccion-de-texto-pdf-) | `extraccion-texto:1.3.0` (3 réplicas, cada una registrada en Consul) | no |
+| orquestador | [vale36/Orquestador](https://github.com/vale36/Orquestador) | `orquestador:1.2.0` | sí, por Traefik: `https://pdf.universidad.localhost` |
+| validacion-pdf | [valentinapenasco/validacion-pdf](https://github.com/valentinapenasco/validacion-pdf) | `validacion-pdf:1.2.0` | no |
+| extraccion-texto | [NicolasPerez735/Extraccion-de-texto-pdf-](https://github.com/NicolasPerez735/Extraccion-de-texto-pdf-) | `extraccion-texto:1.3.1` (3 réplicas, cada una registrada en Consul) | no |
 | persistencia-actualizaciones | [matiasscanoo/persistencia-actualizaciones](https://github.com/matiasscanoo/persistencia-actualizaciones) | `persistencia-actualizaciones:1.1.0` | no |
 | persistencia-consultas | [ManuelGomez33/persistencia-consultas](https://github.com/ManuelGomez33/persistencia-consultas) | `persistencia-consultas:1.1.0` | no |
 
@@ -143,11 +143,11 @@ Abajo, lo que hace paso por paso.
    y del orquestador por Traefik. A mano son estos pasos:
 
    ```bash
-   docker build -t validacion-pdf:1.1.0 ../validacion-pdf
-   docker build -t extraccion-texto:1.3.0 ../Extraccion-de-texto-pdf-
+   docker build -t validacion-pdf:1.2.0 ../validacion-pdf
+   docker build -t extraccion-texto:1.3.1 ../Extraccion-de-texto-pdf-
    docker build -t persistencia-actualizaciones:1.1.0 ../persistencia-actualizaciones
    docker build -t persistencia-consultas:1.1.0 ../persistencia-consultas
-   docker build -t orquestador:1.1.0 ../Orquestador
+   docker build -t orquestador:1.2.0 ../Orquestador
    cp .env.example .env
    for f in env/*.env.example; do cp "$f" "${f%.example}"; done
    docker compose up -d --wait

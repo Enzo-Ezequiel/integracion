@@ -107,12 +107,13 @@ networks:
   redutn:
     external: true
 
-# Archivos generados por el bootstrap de Consul en ../dockers (ignorados por Git en ese
-# repo). El valor nunca aparece en este archivo ni en los logs.
+# Archivos generados por el bootstrap de Consul (ignorados por Git en ese repo). La carpeta
+# sale de CONSUL_TOKENS_DIR; por defecto, ../dockers. El valor nunca aparece en este
+# archivo ni en los logs.
 secrets:
   config_loader_token:
-    file: ../dockers/consul/generated/config-loader.token
+    file: ${CONSUL_TOKENS_DIR:-../dockers/consul/generated}/config-loader.token
   consul_microservices_token:
-    file: ../dockers/consul/generated/microservices.token
+    file: ${CONSUL_TOKENS_DIR:-../dockers/consul/generated}/microservices.token
   consul_orchestrator_token:
-    file: ../dockers/consul/generated/orchestrator.token
+    file: ${CONSUL_TOKENS_DIR:-../dockers/consul/generated}/orchestrator.token
