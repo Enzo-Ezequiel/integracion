@@ -2,7 +2,7 @@
 
 ```
 Contrato: microservicios-pdf
-Versión: 1.6.0
+Versión: 1.7.0
 Formato: JSON UTF-8
 Identificación: UUID
 Fechas: ISO-8601 UTC
@@ -13,6 +13,17 @@ Pydantic de cada servicio son su implementación. Cualquier cambio sube la versi
 en [Cambios](#cambios): compatible (minor) o `BREAKING CHANGE` (major).
 
 ## Cambios
+
+### 1.7.0 (2026-11-09) — compatible con 1.6.0
+
+Respuestas a la revisión del profesor. No cambian rutas, campos ni la tabla de códigos de error.
+Imágenes `validacion-pdf:1.2.0`, `extraccion-texto:1.3.1` y `orquestador:1.2.0`; el resto sigue
+en `1.1.0`.
+
+| # | Cambio | Sección |
+|---|---|---|
+| 1 | Un PDF protegido con contraseña responde `422 PDF_INVALID` con `details.reason = "protegido_con_contrasena"`, en validación y en extracción (antes: aceptado por validación y `500` en extracción). Un PDF con solo contraseña de dueño (restringe permisos) se acepta. | [validacion-pdf](#validacion-pdf), [extraccion-texto](#extraccion-texto) |
+| 2 | El orquestador corta con `413 PDF_TOO_LARGE` un body que no puede traer un PDF de `PDF_MAX_SIZE_MB` (variable nueva, opcional, `5` por defecto, el mismo valor que en validación). No decodifica el Base64 ni mide el PDF: eso sigue siendo de validación. | [orquestador](#orquestador) |
 
 ### 1.6.0 (2026-11-07) — compatible con 1.5.0
 
@@ -268,6 +279,8 @@ a medias (cada alta es una sola escritura).
 - `POST /validar` — `{"archivo_base64", "nombre"}` → `{"valido": true, "nombre", "tamano_bytes"}`.
 - Error: `{"valido": false, "error": {...}}` con el formato común.
 - Variables: `PDF_MAX_SIZE_MB`, *(1.2.0)* `LOG_LEVEL`.
+- *(1.7.0)* PDF protegido con contraseña: `422 PDF_INVALID` con
+  `details.reason = "protegido_con_contrasena"`. Con solo contraseña de dueño se acepta.
 
 ### `extraccion-texto`
 
@@ -286,6 +299,7 @@ a medias (cada alta es una sola escritura).
 | Caso | Respuesta |
 |---|---|
 | Base64 inválido, archivo vacío o sin la firma `%PDF` | `422 PDF_INVALID` |
+| *(1.7.0)* PDF protegido con contraseña | `422 PDF_INVALID`, `details.reason` = `protegido_con_contrasena` |
 | `pypdf` no puede abrir, recorrer o extraer. *(1.4.0)* PyMuPDF no puede abrirlo, o no tiene páginas | `422 PDF_CORRUPTED` |
 | *(1.4.0)* Cola llena o espera vencida (*backpressure*, igual que `/extract`) | `503 DEPENDENCY_UNAVAILABLE`, `details.reason` = `cola_llena` o `espera_agotada`, header `Retry-After: 1` |
 | PDF sin texto (por ejemplo, escaneado) | `200` con `"texto": ""`: es un PDF válido |
@@ -371,6 +385,11 @@ procesó nada y el cliente puede volver a intentar después de `Retry-After`. Se
   `CONSUL_HTTP_TOKEN_FILE`, `CONSUL_FALLBACK_ENABLED`. Con Consul las cuatro `*_URL` son opcionales
   (solo se usan como fallback explícito). *(1.6.0)* `CONSUL_SERVICE_ADDRESS`,
   `CONSUL_SERVICE_PORT` y `CONSUL_SERVICE_TAGS` (registro propio con los tags de Traefik).
+  *(1.7.0)* `PDF_MAX_SIZE_MB`, opcional (`5` por defecto), el mismo valor que en validación.
+- *(1.7.0)* Antes de leer el request corta con `413 PDF_TOO_LARGE`
+  (`details.max_size_bytes`) un body más grande que el Base64 de un PDF de `PDF_MAX_SIZE_MB`
+  más sus saltos de línea y el resto del JSON. No decodifica el Base64: uno inválido o con saltos
+  de línea llega a validación, que decide.
 
 *(1.1.0)*
 
