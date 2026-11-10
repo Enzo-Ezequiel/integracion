@@ -101,7 +101,14 @@ for linea in "${SERVICIOS[@]}"; do
   echo "$servicio /health → $codigo"
   [ "$codigo" = 200 ] || falla "$servicio no responde"
 done
-codigo=$(curl -s --ssl-no-revoke -o /dev/null -w '%{http_code}' "https://$ORQUESTADOR_HOST/health" || true)
+
+# Traefik lee el catálogo de Consul cada 10 s (refreshInterval): recién levantado, el
+# orquestador da 404 por Traefik unos segundos aunque esté sano. Se reintenta hasta 30 s.
+for intento in $(seq 15); do
+  codigo=$(curl -s --ssl-no-revoke -o /dev/null -w '%{http_code}' "https://$ORQUESTADOR_HOST/health" || true)
+  [ "$codigo" = 200 ] && break
+  sleep 2
+done
 echo "https://$ORQUESTADOR_HOST/health (Traefik) → $codigo"
 [ "$codigo" = 200 ] || falla "el orquestador no responde por Traefik"
 
