@@ -95,7 +95,18 @@ Cómo mostrarlo (UI de Consul en <http://127.0.0.1:8500/ui/>, con el token de in
 ### Prueba por prueba (botón ▷ de VS Code)
 
 `pruebas/` tiene un script de PowerShell por cada cosa que se muestra. Se abren en VS Code y
-se corren con ▷, en orden. Cada uno dice qué hace, qué se espera y qué decir:
+se corren con ▷, en orden. Cada uno termina con un **Resultado** (qué pasó) y **Dónde verlo**
+(la dirección o el comando para comprobarlo: Consul, Swagger, MongoDB, los logs). Los que
+llaman a `sistema.ps1` avisan si algo falló.
+
+Funcionan en Windows PowerShell 5.1 tal cual, aunque la terminal tenga activado un entorno de
+Python:
+
+- Los pedidos HTTPS van con `curl.exe`: `Invoke-WebRequest` de PowerShell 5.1 no resuelve
+  `*.localhost`.
+- Los PDFs de prueba se arman en PowerShell, sin Python: el Control de aplicaciones de Windows
+  bloquea a veces el `python.exe` de los entornos temporales de `uv`. El PDF con contraseña está
+  guardado en `pruebas/archivos/`.
 
 | Script | Qué muestra | Se espera |
 |---|---|---|
@@ -103,7 +114,7 @@ se corren con ▷, en orden. Cada uno dice qué hace, qué se espera y qué deci
 | `01-contenedores.ps1` | Contenedores y puertos | Solo Traefik publica 80 y 443 |
 | `02-consul.ps1` | Servicios en Consul; abre la UI con el token en el portapapeles | Los cinco servicios |
 | `03-traefik.ps1` | El router del orquestador | `orquestador@consulcatalog`, `enabled` |
-| `04-recorrido-de-un-pdf.ps1` | `sistema.sh demo` | `201` y los logs de los cinco servicios |
+| `04-recorrido-de-un-pdf.ps1` | Un PDF nuevo, su recorrido en los logs y el documento en MongoDB | `201` y los logs de los cinco servicios |
 | `05-pdf-nuevo.ps1` | Un PDF nuevo | `201` |
 | `06-pdf-duplicado.ps1` | El mismo PDF dos veces | `201` y después `409 DUPLICATE_CHECKSUM` |
 | `07-no-es-pdf.ps1` | Un `.txt` | `422 PDF_INVALID` |
@@ -112,8 +123,11 @@ se corren con ▷, en orden. Cada uno dice qué hace, qué se espera y qué deci
 | `10-persistencia-caida.ps1` | Apaga persistencia-actualizaciones | `503 DEPENDENCY_UNAVAILABLE`; después la levanta |
 | `11-redis-caido.ps1` | Apaga Redis | `201` igual (*fail-open*); después lo levanta |
 | `12-tests.ps1` | Las suites de los siete repos | Todas en verde |
-| `13-grype.ps1` | Vulnerabilidades de las imágenes | `seguridad/resumen.md` |
-| `14-apagar.ps1` | Baja las dos capas | Los datos de MongoDB quedan |
+| `13-carga-k6.ps1` | k6, 5 usuarios durante 30 s, con los 10 PDFs de `pdfs/` | 100 % de checks; el reparto entre réplicas |
+| `14-carga-vegeta.ps1` | vegeta, 30 pedidos/s durante 30 s | Solo 201 y 409; el reparto entre réplicas |
+| `15-grype.ps1` | Vulnerabilidades de las imágenes | `seguridad/resumen.md` |
+| `16-swagger.ps1` | Abre Swagger y deja en el portapapeles el body de `POST /pdf` con un PDF nuevo | 201 al pegarlo y Execute; 409 la segunda vez |
+| `17-apagar.ps1` | Borra los PDFs de las pruebas (`prueba-*.pdf`, `documento-*-NN.pdf`) con `DELETE /pdf/{id}` y baja las dos capas | Los demás documentos quedan |
 
 ### Con un solo comando
 
