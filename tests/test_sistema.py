@@ -42,6 +42,17 @@ class SistemaTests(unittest.TestCase):
         levantar = (SCRIPTS / "levantar.sh").read_text(encoding="utf-8")
         self.assertIn("sistema.sh tests", levantar)
 
+    def test_el_humo_espera_a_que_traefik_descubra_al_orquestador(self):
+        # Traefik lee el catálogo de Consul cada 10 s (refreshInterval): recién levantado,
+        # el orquestador da 404 por Traefik unos segundos aunque esté sano. Se reintenta
+        # antes de dar el humo por fallado.
+        levantar = (SCRIPTS / "levantar.sh").read_text(encoding="utf-8")
+        inicio = levantar.index("https://$ORQUESTADOR_HOST/health")
+        fin = levantar.index('falla "el orquestador no responde por Traefik"')
+        chequeo = levantar[levantar.rindex("\n\n", 0, inicio) : fin]
+        self.assertIn("for intento in", chequeo)
+        self.assertIn("sleep", chequeo)
+
 
 if __name__ == "__main__":
     unittest.main()
