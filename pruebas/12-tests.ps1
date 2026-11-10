@@ -2,4 +2,9 @@
 
 Titulo "Tests de los siete repos"
 & .\scripts\sistema.ps1 tests
-Decir "Cada microservicio tiene tests unitarios y de integración, hechos con TDD: en el historial están los commits rojos antes de los verdes. No hace falta nada levantado: usan dobles en memoria."
+if (Fallo-Sistema) { return }
+Resultado "se corrieron las suites de tests de los repos (arriba, una línea por repo)."
+DondeVer @(
+    'En cada repo, la suite completa: uv run python -m pytest',
+    'El historial de TDD (test antes que feat): git log --oneline, en cada repo'
+)
