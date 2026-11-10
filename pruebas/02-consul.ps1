@@ -7,4 +7,9 @@ Write-Host "Token de la interfaz copiado al portapapeles: pegalo con Ctrl+V en l
 Start-Process "http://127.0.0.1:8500/ui/"
 Write-Host ""
 docker exec consul sh -c 'export CONSUL_HTTP_TOKEN=$(cat /consul/data/bootstrap/ui.token); consul catalog services'
-Decir "Consul es la guía de servicios: cada uno se registra al arrancar y Consul revisa su /health. También guarda la configuración de cada servicio (Key/Value, config/). Tiene ACL: sin token no se ve nada."
+Resultado "se copió el token de la interfaz al portapapeles y se abrió Consul en el navegador."
+DondeVer @(
+    'En la página de Consul: Log in (arriba a la derecha), pegar con Ctrl+V',
+    'Services: validacion-pdf, extraccion (3 instancias), persistencia-actualizaciones, persistencia-consultas y orquestador, en verde',
+    'Key/Value > config: la configuración de cada servicio'
+)
